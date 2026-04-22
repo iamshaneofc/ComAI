@@ -94,4 +94,11 @@ class AutomationService:
                     if p:
                         full_products.append(p)
                         
-                await self.whatsapp_service.send_product_recommendation(user, full_products)
+                phone = getattr(user, "phone", None)
+                if phone:
+                    message = self.whatsapp_service.generate_recommendation_message(full_products)
+                    print("Queued WhatsApp message")
+                    from app.tasks.message_tasks import send_whatsapp_message
+                    send_whatsapp_message.delay(phone, message)
+                else:
+                    logger.warning("Cannot send WhatsApp: user has no phone", user_id=str(user_id))

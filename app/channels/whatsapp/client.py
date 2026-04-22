@@ -10,3 +10,10 @@ class WhatsAppClient:
         """
         logger.info(f"Sending WhatsApp to {phone}", message_length=len(message))
         print(f"Sending WhatsApp to {phone}: {message}")
+
+    def send_message_sync(self, phone: str, message: str) -> None:
+        """
+        Synchronous version for Celery workers.
+        """
+        logger.info(f"Sending WhatsApp to {phone} (SYNC)", message_length=len(message))
+        print(f"Worker sending message: {message} to {phone}")

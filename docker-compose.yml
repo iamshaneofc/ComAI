@@ -32,5 +32,17 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  worker:
+    build: .
+    command: celery -A app.core.celery_app worker --loglevel=info
+    depends_on:
+      - redis
+      - backend
+
 volumes:
   postgres_data:
