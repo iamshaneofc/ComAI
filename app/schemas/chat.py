@@ -1,10 +1,7 @@
 """
 Chat Pydantic Schemas — Phase 1 (simplified for MVP).
 
-Changes from previous version:
-    - ChatRequest accepts store_id directly in the body (no auth header needed for Phase 1)
-    - ChatResponse includes products list and intent
-    - Removed session_id, channel, quick_replies (Phase 2)
+Tenant is never taken from this payload; it comes from API key auth only.
 """
 from uuid import UUID
 

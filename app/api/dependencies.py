@@ -1,55 +1,69 @@
 import time
-from collections import defaultdict
+
 import structlog
-from fastapi import Request, HTTPException, Depends, Security
+from fastapi import Depends, Header, HTTPException, Request, Security
 from fastapi.security.api_key import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import get_db
+from app.core.redis_client import get_redis
 from app.models.store import Store
+from app.repositories.store_repo import StoreRepository
 
 logger = structlog.get_logger(__name__)
 api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
 
-# Basic in-memory rate limiter
-# { "store_id:user_id": [(timestamp1), (timestamp2)] }
-_rate_limits: dict[str, list[float]] = defaultdict(list)
 
-async def verify_store_api_key(request: Request, api_key: str = Security(api_key_header), db: AsyncSession = Depends(get_db)) -> Store:
+async def verify_store_api_key(
+    request: Request,
+    api_key: str = Security(api_key_header),
+    db: AsyncSession = Depends(get_db),
+) -> Store:
     """Authenticates API Key against Stores and binds into state/log context."""
     if not api_key:
         raise HTTPException(status_code=401, detail="X-API-KEY header missing")
-    
-    result = await db.execute(select(Store).where(Store.api_key == api_key, Store.is_active == True))
-    store = result.scalar_one_or_none()
-    
+
+    repo = StoreRepository(db)
+    store = await repo.get_by_api_key(api_key)
+
     if not store:
-        logger.warning("Invalid API Key attempted", api_key=api_key[:5] + "...")
+        logger.warning("Invalid API Key attempted", api_key_prefix=(api_key[:4] + "…") if api_key else "")
         raise HTTPException(status_code=401, detail="Invalid API Key")
-        
+
     request.state.store = store
     request.state.store_id = store.id
-    
-    # Inject structlog properties globally
+
     structlog.contextvars.bind_contextvars(store_id=str(store.id))
     return store
 
-async def resolve_rate_limit(request: Request, store: Store = Depends(verify_store_api_key)):
-    """Enforces 20 requests per minute per user per store on endpoints."""
-    # Attempt to extract session parsing without body logic
-    # In chat, session_id is in body normally, but rate limiter happens before body.
-    # To limit properly, we can limit based on IP instead if session_id is body only
-    user_id = request.client.host if request.client else "unknown"
-    key = f"{store.id}:{user_id}"
-    
-    now = time.time()
-    # Filter valid timestamps within 60 seconds
-    valid_times = [t for t in _rate_limits[key] if now - t < 60]
-    
-    if len(valid_times) >= 20: # 20 requests per minute ceiling
-        logger.warning("Rate limit exceeded", store_id=str(store.id), identity=user_id)
-        raise HTTPException(status_code=429, detail="Too many requests")
-        
-    valid_times.append(now)
-    _rate_limits[key] = valid_times
+
+def verify_provision_secret(
+    x_provision_secret: str | None = Header(None, alias="X-Provision-Secret"),
+) -> None:
+    """Bootstrap-only: create initial store using shared platform secret (APP_SECRET_KEY)."""
+    if not x_provision_secret or x_provision_secret != settings.APP_SECRET_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Provision-Secret")
+
+
+async def resolve_rate_limit(request: Request) -> None:
+    """Per-tenant + client IP fixed window limit using Redis (falls back open if Redis unavailable)."""
+    store = getattr(request.state, "store", None)
+    if store is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    window = int(time.time() // 60)
+    identity = request.client.host if request.client else "unknown"
+    key = f"rl:v1:{store.id}:{identity}:{window}"
+    try:
+        r = await get_redis()
+        n = await r.incr(key)
+        if n == 1:
+            await r.expire(key, 120)
+        if n > 20:
+            logger.warning("Rate limit exceeded", store_id=str(store.id), identity=identity)
+            raise HTTPException(status_code=429, detail="Too many requests")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Rate limiter degraded (Redis error); allowing request", error=str(exc))

@@ -1,10 +1,15 @@
-"""Sync outbound tasks (e.g. WhatsApp) — no DB; idempotency + retries for safe redelivery."""
+"""Celery tasks for automation — fresh DB session per run, explicit commit/rollback."""
 
 from __future__ import annotations
 
-from app.channels.whatsapp.service import WhatsAppService
+import asyncio
+from uuid import UUID
+
+import structlog
+
 from app.core.celery_app import celery_app
 from app.core.celery_retry import retry_countdown_seconds
+from app.core.database import AsyncSessionLocal
 from app.tasks.task_idempotency import TaskIdempotency, stable_idempotency_key
 from app.tasks.task_logging import (
     log_task_failed,
@@ -15,16 +20,35 @@ from app.tasks.task_logging import (
 
 MAX_RETRIES = 5
 
+logger = structlog.get_logger(__name__)
+
+
+async def _evaluate_user_async(store_id: UUID, user_id: UUID) -> None:
+    from app.modules.automation.service import AutomationService
+    from app.repositories.user_repo import UserRepository
+
+    async with AsyncSessionLocal() as session:
+        try:
+            if await UserRepository(session).get_by_id_for_store(store_id, user_id) is None:
+                logger.warning("Automation task skipped: user not in tenant", store_id=str(store_id))
+                return
+            svc = AutomationService(session)
+            await svc.evaluate_user(store_id, user_id)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
 
 @celery_app.task(bind=True, max_retries=MAX_RETRIES, acks_late=True)
-def send_whatsapp_message(
+def evaluate_user_automation(
     self,
-    phone: str,
-    message: str,
+    store_id: str,
+    user_id: str,
     idempotency_key: str | None = None,
 ) -> None:
-    raw_key = stable_idempotency_key(str(phone), str(message), explicit=idempotency_key)
-    idem = TaskIdempotency(namespace="sync.whatsapp_send", idempotency_key=raw_key)
+    raw_key = stable_idempotency_key(str(store_id), str(user_id), explicit=idempotency_key)
+    idem = TaskIdempotency(namespace="automation.evaluate_user", idempotency_key=raw_key)
     task_name = self.name
     task_id = self.request.id
 
@@ -35,6 +59,8 @@ def send_whatsapp_message(
             task_id=task_id,
             idempotency_key=raw_key,
             reason="already_completed",
+            store_id=store_id,
+            user_id=user_id,
         )
         return
 
@@ -42,8 +68,8 @@ def send_whatsapp_message(
         task_name,
         task_id=task_id,
         idempotency_key=raw_key,
-        phone=phone,
-        message_len=len(message) if message else 0,
+        store_id=store_id,
+        user_id=user_id,
     )
 
     if outcome == "lease_held":
@@ -52,13 +78,15 @@ def send_whatsapp_message(
             task_id=task_id,
             idempotency_key=raw_key,
             reason="lease_held_retry",
+            store_id=store_id,
+            user_id=user_id,
         )
         raise self.retry(
             countdown=retry_countdown_seconds(self.request.retries),
         )
 
     try:
-        WhatsAppService().send_message_sync(phone, message)
+        asyncio.run(_evaluate_user_async(UUID(store_id), UUID(user_id)))
     except Exception as exc:
         idem.release_lease()
         will_retry = self.request.retries < self.max_retries
@@ -68,7 +96,8 @@ def send_whatsapp_message(
             idempotency_key=raw_key,
             exc=exc,
             will_retry=will_retry,
-            phone=phone,
+            store_id=store_id,
+            user_id=user_id,
         )
         if will_retry:
             raise self.retry(
@@ -82,5 +111,6 @@ def send_whatsapp_message(
         task_name,
         task_id=task_id,
         idempotency_key=raw_key,
-        phone=phone,
+        store_id=store_id,
+        user_id=user_id,
     )

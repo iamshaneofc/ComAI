@@ -8,7 +8,7 @@ Rules:
 """
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.store import Store
@@ -25,6 +25,12 @@ class StoreRepository(BaseRepository[Store]):
     # Reads
     # ----------------------------------------------------------------
 
+    async def get_by_api_key(self, api_key: str) -> Store | None:
+        result = await self.db.execute(
+            select(Store).where(Store.api_key == api_key, Store.is_active.is_(True))
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_slug(self, slug: str) -> Store | None:
         result = await self.db.execute(
             select(Store).where(Store.slug == slug)
@@ -32,9 +38,20 @@ class StoreRepository(BaseRepository[Store]):
         return result.scalar_one_or_none()
 
     async def get_by_domain(self, domain: str) -> Store | None:
+        """Resolve store by Shopify shop domain (case-insensitive) under credentials.shopify.domain."""
+        d = domain.strip().lower()
         result = await self.db.execute(
-            select(Store).where(Store.shopify_domain == domain)
+            select(Store).where(
+                and_(
+                    Store.credentials.isnot(None),
+                    func.lower(Store.credentials["shopify"]["domain"].as_string()) == d,
+                )
+            )
         )
+        return result.scalar_one_or_none()
+
+    async def get_by_id(self, store_id: UUID) -> Store | None:
+        result = await self.db.execute(select(Store).where(Store.id == store_id))
         return result.scalar_one_or_none()
 
     async def list_stores(

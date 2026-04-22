@@ -39,6 +39,8 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
+# Exported for Celery workers and other out-of-request callers (never share request sessions).
+
 
 # ----------------------------------------------------------------
 # FastAPI dependency — inject into repositories via Depends()

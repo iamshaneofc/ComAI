@@ -13,3 +13,9 @@ class UserRepository(BaseRepository[User]):
             select(User).where(User.store_id == store_id, User.external_id == external_id)
         )
         return result.scalar_one_or_none()
+
+    async def get_by_id_for_store(self, store_id: UUID, user_id: UUID) -> User | None:
+        result = await self.db.execute(
+            select(User).where(User.store_id == store_id, User.id == user_id)
+        )
+        return result.scalar_one_or_none()

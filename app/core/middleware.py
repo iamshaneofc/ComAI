@@ -1,13 +1,8 @@
 """
-Request ID and Tenant Resolver Middleware.
+Request ID middleware.
 
-RequestIDMiddleware:
-    - Assigns a unique request ID to every incoming request
-    - Adds it to response headers and logging context
-
-TenantResolverMiddleware:
-    - Reads X-Store-ID header (or JWT claim) and stores in request state
-    - ALL downstream handlers can access request.state.store_id
+Note: Tenant identity is resolved ONLY via `verify_store_api_key` (X-API-KEY),
+never from X-Store-ID headers.
 """
 import uuid
 
@@ -32,25 +27,3 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
-
-
-class TenantResolverMiddleware(BaseHTTPMiddleware):
-    """
-    Resolves the store_id (tenant) from the X-Store-ID header.
-
-    In production, this should also validate the store_id against
-    the authenticated user's allowed stores (done in service layer).
-    """
-
-    async def dispatch(self, request: Request, call_next) -> Response:
-        store_id_raw = request.headers.get("X-Store-ID")
-        if store_id_raw:
-            try:
-                request.state.store_id = uuid.UUID(store_id_raw)
-            except ValueError:
-                request.state.store_id = None
-        else:
-            request.state.store_id = None
-
-        structlog.contextvars.bind_contextvars(store_id=str(request.state.store_id))
-        return await call_next(request)

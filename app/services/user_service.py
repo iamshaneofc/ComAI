@@ -19,9 +19,13 @@ class UserService:
         """Fetch existing user by session/phone/email, or create if missing."""
         user = await self.repo.get_by_external_id(store_id, external_id)
         if user:
+            if user.store_id != store_id:
+                raise RuntimeError("Tenant isolation violation: user store mismatch")
             return user
-        
+
         user = User(store_id=store_id, external_id=external_id)
         created = await self.repo.create(user)
+        if created.store_id != store_id:
+            raise RuntimeError("Tenant isolation violation: created user store mismatch")
         logger.info("Created new user", user_id=str(created.id), store_id=str(store_id))
         return created

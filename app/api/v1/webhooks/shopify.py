@@ -1,67 +1,85 @@
 import json
-import logging
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.shopify.webhook_handler import verify_and_normalize_webhook
-from app.modules.stores.service import StoreService
-from app.modules.products.service import ProductService
 from app.core.database import get_db
-import structlog
+from app.modules.products.service import ProductService
+from app.modules.stores.service import StoreService
+from app.repositories.store_repo import StoreRepository
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
+
+def _normalize_shop_domain(raw: str) -> str:
+    return raw.strip().lower().rstrip("/")
+
+
 @router.post("/products/create")
 @router.post("/products/update")
 async def shopify_product_webhook(
     request: Request,
-    store_id: UUID | None = None, # It can be retrieved via query params if generic, but instructions were just webhooks/shopify/products. We simulate store validation via query parameter here or dynamic path extraction. If not provided it will error. Wait! The prompt endpoint didn't specify store_id specifically in the path for webhook POST. Assuming query parameter.
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
+    """
+    Shopify product webhooks.
+
+    Tenant is resolved ONLY from ``X-Shopify-Shop-Domain`` + HMAC (never ``store_id`` query).
+    """
     structlog.contextvars.bind_contextvars(flow="webhook")
-    if not store_id:
-        store_id_str = request.query_params.get("store_id")
-        if store_id_str:
-            store_id = UUID(store_id_str)
-        else:
-            raise HTTPException(status_code=400, detail="store_id query param is required")
+
+    shop_domain = (
+        request.headers.get("X-Shopify-Shop-Domain")
+        or request.headers.get("x-shopify-shop-domain")
+        or ""
+    )
+    shop_domain = _normalize_shop_domain(shop_domain)
+    if not shop_domain:
+        raise HTTPException(status_code=400, detail="Missing X-Shopify-Shop-Domain header")
 
     raw_body = await request.body()
     hmac_header = request.headers.get("x-shopify-hmac-sha256") or request.headers.get("X-Shopify-Hmac-Sha256")
-    
+
     try:
-        payload = json.loads(raw_body.decode('utf-8'))
+        payload = json.loads(raw_body.decode("utf-8"))
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
-        
-    store_service = StoreService(db)
-    try:
-        store = await store_service.get_store(store_id)
-    except HTTPException as e:
-        raise e
-        
+
+    repo = StoreRepository(db)
+    store = await repo.get_by_domain(shop_domain)
+    if store is None:
+        raise HTTPException(status_code=404, detail="Unknown shop domain")
+
     creds = store.credentials.get("shopify", {}) if store.credentials else {}
     webhook_secret = creds.get("webhook_secret")
-        
+    configured_domain = _normalize_shop_domain(str(creds.get("domain") or ""))
+    if configured_domain and shop_domain != configured_domain:
+        logger.warning(
+            "Shopify domain header mismatch",
+            header_domain=shop_domain,
+            configured_domain=configured_domain,
+            store_id=str(store.id),
+        )
+        raise HTTPException(status_code=403, detail="Shop domain does not match store configuration")
+
+    store_id: UUID = store.id
+
     try:
-        # Adapter purely normalizes and validates signature
         p_create = verify_and_normalize_webhook(raw_body, hmac_header, webhook_secret, payload)
-        
-        # Service handles DB orchestration
         product_service = ProductService(db)
         await product_service.upsert_product(store_id, p_create)
-        
     except ValueError as e:
-        logger.error(f"Webhook processing error: {e}")
+        logger.error("Webhook processing error", error=str(e))
         if str(e) == "Invalid signature":
-            raise HTTPException(status_code=401, detail="Invalid HMAC signature")
-        raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=401, detail="Invalid HMAC signature") from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        logger.exception(f"Unexpected webhook error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-        
+        logger.exception("Unexpected webhook error", error=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
     return {"status": "ok"}

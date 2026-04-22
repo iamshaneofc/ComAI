@@ -19,7 +19,6 @@ Rules:
 import structlog
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-import asyncio
 
 from app.ai.intent.detector import (
     INTENT_GENERAL,
@@ -119,11 +118,10 @@ class ChatService:
                     "price_limit": intent.price_limit
                 }
                 await self.memory_service.track_event(store_id, user.id, "search", event_payload)
-                
-                # Evaluate possible actions automatically
-                from app.modules.automation.service import AutomationService
-                automation_svc = AutomationService(self.db)
-                asyncio.create_task(automation_svc.evaluate_user(store_id, user.id))
+
+                from app.tasks.automation_tasks import evaluate_user_automation
+
+                evaluate_user_automation.delay(str(store_id), str(user.id))
 
         # ── Step 3 + 4: Build prompt + call LLM (or canned) ───────
         if intent.intent == INTENT_GREETING:

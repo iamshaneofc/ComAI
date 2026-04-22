@@ -17,7 +17,7 @@ from app.api.v1.router import v1_router
 from app.core.config import settings
 from app.core.database import engine
 from app.core.logging import configure_logging
-from app.core.middleware import RequestIDMiddleware, TenantResolverMiddleware
+from app.core.middleware import RequestIDMiddleware
 
 logger = structlog.get_logger(__name__)
 
@@ -45,6 +45,12 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("AI Commerce Platform shutting down")
+    try:
+        from app.core.redis_client import close_redis
+
+        await close_redis()
+    except Exception:
+        pass
     await engine.dispose()
 
 
@@ -70,7 +76,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(TenantResolverMiddleware)
     app.add_middleware(RequestIDMiddleware)
 
     # ----------------------------------------------------------------

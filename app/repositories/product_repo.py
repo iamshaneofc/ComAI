@@ -4,11 +4,12 @@ Product Repository — all DB queries for the Product entity.
 Rules:
     - Every method receives store_id (multi-tenancy enforced at DB level)
     - No business logic — pure async SQLAlchemy queries
-    - search_products supports: keyword ILIKE, price range, category, tags
+    - search_products: keyword via GIN-backed tsvector @@ to_tsquery, with ILIKE fallback
 """
+import re
 from uuid import UUID
 
-from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import String, and_, cast, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,10 +18,34 @@ from app.repositories.base import BaseRepository
 from app.schemas.product import ProductSearchFilters
 
 
+def _keyword_to_prefix_tsquery(keyword: str) -> str | None:
+    """
+    Build a safe `to_tsquery` pattern: AND-joined prefix lexemes (`token:*`).
+    Returns None when there are no tokens suitable for FTS (use ILIKE only).
+    """
+    parts: list[str] = []
+    for tok in re.findall(r"\S+", keyword.strip()):
+        cleaned = re.sub(r"\W", "", tok, flags=re.UNICODE)
+        if len(cleaned) < 2:
+            continue
+        parts.append(f"{cleaned}:*")
+    if not parts:
+        return None
+    return " & ".join(parts)
+
+
 class ProductRepository(BaseRepository[Product]):
 
     def __init__(self, db: AsyncSession) -> None:
         super().__init__(model=Product, db=db)
+
+    @staticmethod
+    def _assert_single_tenant_batch(products: list[Product]) -> None:
+        if not products:
+            return
+        sid = products[0].store_id
+        if any(p.store_id != sid for p in products):
+            raise ValueError("Product batch mixes multiple store_id values")
 
     # ----------------------------------------------------------------
     # Writes
@@ -33,7 +58,8 @@ class ProductRepository(BaseRepository[Product]):
         """Upsert multiple products utilizing ON CONFLICT to update."""
         if not products:
             return
-            
+        self._assert_single_tenant_batch(products)
+
         values = []
         for p in products:
             vals = {
@@ -83,6 +109,7 @@ class ProductRepository(BaseRepository[Product]):
 
     async def bulk_insert_products(self, products: list[Product]) -> list[Product]:
         """Insert multiple products in a single flush — efficient for sync jobs."""
+        self._assert_single_tenant_batch(products)
         for p in products:
             self.db.add(p)
         await self.db.flush()
@@ -110,7 +137,7 @@ class ProductRepository(BaseRepository[Product]):
     ) -> tuple[list[Product], int]:
         """
         Flexible product search with:
-            - keyword: ILIKE on searchable_text (covers title + desc + tags)
+            - keyword: search_vector @@ to_tsquery (GIN), OR ILIKE on searchable_text
             - price range: min_price / max_price
             - category: ARRAY contains check
             - is_available: default True
@@ -121,11 +148,15 @@ class ProductRepository(BaseRepository[Product]):
             Product.is_available == filters.is_available,
         ]
 
-        # Keyword search using pre-built searchable_text
         if filters.keyword:
-            conditions.append(
-                Product.searchable_text.ilike(f"%{filters.keyword}%")
-            )
+            kw = filters.keyword.strip()
+            ilike = Product.searchable_text.ilike(f"%{kw}%")
+            tsq_str = _keyword_to_prefix_tsquery(kw)
+            if tsq_str is not None:
+                tsq = func.to_tsquery("english", literal(tsq_str, type_=String()))
+                conditions.append(or_(Product.search_vector.op("@@")(tsq), ilike))
+            else:
+                conditions.append(ilike)
 
         # Price range
         if filters.min_price is not None:

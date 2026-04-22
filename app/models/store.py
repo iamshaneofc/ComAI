@@ -32,5 +32,18 @@ class Store(Base, UUIDMixin, TimestampMixin):
     # AI behavior config (JSON blob)
     ai_config: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    @property
+    def domain(self) -> str | None:
+        """Shop/platform domain from unified `credentials` JSON (not a separate column)."""
+        if not self.credentials:
+            return None
+        for key in ("shopify", "custom", "woocommerce"):
+            block = self.credentials.get(key)
+            if isinstance(block, dict):
+                d = block.get("domain")
+                if d:
+                    return str(d)
+        return None
+
     def __repr__(self) -> str:
         return f"<Store id={self.id} slug={self.slug} platform={self.platform}>"

@@ -1,16 +1,14 @@
 """
-Chat API Route — POST /chat
+Chat API — POST /chat
 
-Phase 1 design:
-    - No auth required (demo / investor pitch friendly)
-    - store_id passed in the request body
-    - Thin route: validate → service → respond
+Tenant is always `request.state.store` from X-API-KEY (never from headers/body).
 """
 from fastapi import APIRouter, Depends, Request
 
+from app.api.dependencies import resolve_rate_limit
+from app.core.tenant import authenticated_store_id
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
-from app.api.dependencies import resolve_rate_limit
 
 router = APIRouter()
 
@@ -26,22 +24,8 @@ async def chat(
     payload: ChatRequest,
     service: ChatService = Depends(ChatService),
 ) -> ChatResponse:
-    """
-    Send a message to the AI shopping assistant.
-
-    **Demo flow:**
-    1. POST with `store_id` + `message`
-    2. AI detects intent (product search, greeting, support)
-    3. Fetches relevant products from the store's catalogue
-    4. Builds contextual prompt + calls OpenAI
-    5. Returns AI reply + product cards
-
-    **Example inputs:**
-    - `"Shoes under 3000"` → product_search + matching products
-    - `"Hi there"` → greeting (no LLM call)
-    - `"Track my order"` → support response
-    """
+    """Send a message to the AI assistant for the authenticated store."""
     return await service.handle_chat(
-        store_id=request.state.store_id,
+        store_id=authenticated_store_id(request),
         payload=payload,
     )

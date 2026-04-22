@@ -12,6 +12,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.tenant import ensure_products_single_tenant, ensure_row_store_id
 from app.models.product import Product
 from app.repositories.product_repo import ProductRepository
 from app.schemas.product import (
@@ -27,7 +28,7 @@ logger = structlog.get_logger(__name__)
 
 def _build_searchable_text(data: ProductCreate) -> str:
     """
-    Build a single flat text string for ILIKE keyword search.
+    Build a single flat document for substring fallback search and for search_vector.
     Combines: title + description + tags + categories
     """
     parts = [data.title]
@@ -73,6 +74,7 @@ class ProductService:
             searchable_text=_build_searchable_text(data),
         )
         created = await self.repo.create_product(product)
+        ensure_row_store_id(row_store_id=created.store_id, store_id=store_id, label="product")
         logger.info("Product created", product_id=str(created.id), store_id=str(store_id))
         return ProductResponse.model_validate(created)
 
@@ -103,6 +105,7 @@ class ProductService:
             )
             for d in items
         ]
+        ensure_products_single_tenant(products, store_id)
         created = await self.repo.bulk_insert_products(products)
         logger.info(
             "Bulk products created",
@@ -137,6 +140,7 @@ class ProductService:
             )
             for d in items
         ]
+        ensure_products_single_tenant(products, store_id)
         await self.repo.upsert_products_bulk(products)
         logger.info(
             "Bulk products upserted",
@@ -167,6 +171,7 @@ class ProductService:
             raw_data=d.raw_data,
             searchable_text=_build_searchable_text(d),
         )
+        ensure_row_store_id(row_store_id=product.store_id, store_id=store_id, label="product")
         await self.repo.upsert_product(product)
         logger.info("Product upserted", product_external_id=d.external_id, store_id=str(store_id))
 
@@ -178,6 +183,8 @@ class ProductService:
         self, store_id, filters: ProductSearchFilters
     ) -> PaginatedProducts:
         products, total = await self.repo.search_products(store_id, filters)
+        for p in products:
+            ensure_row_store_id(row_store_id=p.store_id, store_id=store_id, label="product")
         return PaginatedProducts(
             items=[ProductResponse.model_validate(p) for p in products],
             total=total,
@@ -204,4 +211,6 @@ class ProductService:
             limit=limit,
         )
         products, _ = await self.repo.search_products(store_id, filters)
+        for p in products:
+            ensure_row_store_id(row_store_id=p.store_id, store_id=store_id, label="product")
         return [ProductSummary.model_validate(p) for p in products]

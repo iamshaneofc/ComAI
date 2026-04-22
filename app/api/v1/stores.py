@@ -1,126 +1,104 @@
 """
-Stores API Endpoints — POST, GET, PATCH, DELETE for store (tenant) management.
+Stores API — provisioning (master secret) + tenant-scoped management (API key).
 
-Rules:
-    - NO business logic here
-    - Validate input (Pydantic), call service, return response
-    - Use Depends() for service injection
+Tenant mutations use only `/stores/me` — no store UUID in path or query (cannot be spoofed).
 """
-from uuid import UUID
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
 
-from fastapi import APIRouter, Depends, Query, status, BackgroundTasks
-
-from app.modules.stores.service import StoreService
+from app.api.dependencies import verify_provision_secret
 from app.modules.stores.service import StoreService
 from app.schemas.store import (
     PaginatedStores,
     StoreCreate,
+    StoreCreatedResponse,
     StoreResponse,
     StoreSummary,
     StoreUpdate,
 )
 
-router = APIRouter()
+provision_router = APIRouter()
+tenant_router = APIRouter()
 
 
-@router.post(
+@provision_router.post(
     "",
-    response_model=StoreResponse,
+    response_model=StoreCreatedResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a new store (tenant)",
+    summary="Provision a new store (platform secret)",
+    dependencies=[Depends(verify_provision_secret)],
 )
 async def create_store(
     payload: StoreCreate,
     service: StoreService = Depends(StoreService),
-) -> StoreResponse:
-    """
-    Creates a new tenant store.
-
-    - Auto-generates a unique slug from the name
-    - Platform must be: shopify | custom | woocommerce
-    """
+) -> StoreCreatedResponse:
+    """Creates a new tenant store. Requires X-Provision-Secret matching APP_SECRET_KEY."""
     store = await service.create_store(payload)
-    return StoreResponse.model_validate(store)
+    return StoreCreatedResponse.model_validate(store)
 
 
-@router.get(
-    "/{store_id}",
+@tenant_router.get(
+    "/me",
     response_model=StoreResponse,
-    summary="Get store by ID",
+    summary="Get the authenticated store",
 )
-async def get_store(
-    store_id: UUID,
-    service: StoreService = Depends(StoreService),
-) -> StoreResponse:
-    """Fetch a store by its UUID. Returns 404 if not found."""
-    store = await service.get_store(store_id)
-    return StoreResponse.model_validate(store)
+async def get_current_store(request: Request) -> StoreResponse:
+    return StoreResponse.model_validate(request.state.store)
 
 
-@router.get(
-    "",
-    response_model=PaginatedStores,
-    summary="List all stores",
-)
-async def list_stores(
-    offset: int = Query(0, ge=0, description="Pagination offset"),
-    limit: int = Query(20, ge=1, le=100, description="Results per page"),
-    active_only: bool = Query(True, description="Filter to active stores only"),
-    service: StoreService = Depends(StoreService),
-) -> PaginatedStores:
-    """Returns a paginated list of stores."""
-    stores, total = await service.list_stores(
-        offset=offset, limit=limit, active_only=active_only
-    )
-    return PaginatedStores(
-        items=[StoreSummary.model_validate(s) for s in stores],
-        total=total,
-        offset=offset,
-        limit=limit,
-    )
-
-
-@router.patch(
-    "/{store_id}",
+@tenant_router.patch(
+    "/me",
     response_model=StoreResponse,
-    summary="Partially update a store",
+    summary="Update the authenticated store",
 )
-async def update_store(
-    store_id: UUID,
+async def update_current_store(
+    request: Request,
     payload: StoreUpdate,
     service: StoreService = Depends(StoreService),
 ) -> StoreResponse:
-    """Partial update — only fields provided in the body are changed."""
+    store_id = request.state.store.id
     store = await service.update_store(store_id, payload)
     return StoreResponse.model_validate(store)
 
 
-@router.delete(
-    "/{store_id}",
+@tenant_router.delete(
+    "/me",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Deactivate a store (soft delete)",
+    summary="Deactivate the authenticated store (soft delete)",
 )
-async def deactivate_store(
-    store_id: UUID,
-    service: StoreService = Depends(StoreService),
-) -> None:
-    """Soft-deletes a store by setting is_active=False."""
-    await service.deactivate_store(store_id)
+async def deactivate_current_store(request: Request, service: StoreService = Depends(StoreService)) -> None:
+    await service.deactivate_store(request.state.store.id)
 
 
-@router.post(
-    "/{store_id}/sync",
+@tenant_router.post(
+    "/me/sync",
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Trigger products sync for a store",
+    summary="Trigger product sync for the authenticated store",
 )
-async def sync_store_products(
-    store_id: UUID,
+async def sync_current_store_products(
+    request: Request,
     background_tasks: BackgroundTasks,
     service: StoreService = Depends(StoreService),
 ):
-    """
-    Triggers an asynchronous synchronization pipeline downloading
-    and upsetting shopify products incrementally. 
-    """
-    background_tasks.add_task(service.sync_store_products, store_id)
-    return {"status": "sync_started", "store_id": store_id}
+    sid = request.state.store.id
+    background_tasks.add_task(service.sync_store_products, sid)
+    return {"status": "sync_started", "store_id": sid}
+
+
+@tenant_router.get(
+    "",
+    response_model=PaginatedStores,
+    summary="List stores (authenticated tenant only)",
+)
+async def list_stores(
+    request: Request,
+    offset: int = Query(0, ge=0, description="Pagination offset (reserved)"),
+    limit: int = Query(20, ge=1, le=100, description="Results per page (reserved)"),
+) -> PaginatedStores:
+    """Returns only the caller's store — no global tenant listing."""
+    store = request.state.store
+    return PaginatedStores(
+        items=[StoreSummary.model_validate(store)],
+        total=1,
+        offset=offset,
+        limit=limit,
+    )

@@ -3,12 +3,14 @@ Product Model — full-featured product schema with search support.
 
 Architecture rules:
     - store_id is MANDATORY (multi-tenancy enforced at DB level)
-    - searchable_text is pre-built for ILIKE queries (no FTS needed for MVP)
+    - searchable_text is the denormalized search document (title, description, tags, categories)
+    - search_vector is a GENERATED tsvector (GIN-indexed) for @@ / to_tsquery search
     - tags/categories stored as ARRAY for filtering
     - images/variants/attributes stored as JSONB for flexibility
     - raw_data preserves original source payload (Shopify/custom) unchanged
 """
 import uuid
+from typing import Any
 
 from sqlalchemy import Index, Numeric, String, Text, UniqueConstraint, Computed
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID, TSVECTOR
@@ -74,11 +76,15 @@ class Product(Base, UUIDMixin, TimestampMixin):
     searchable_text: Mapped[str | None] = mapped_column(
         Text, nullable=True, index=True
     )
-    
-    search_vector: Mapped[str | None] = mapped_column(
-        TSVECTOR,
-        Computed("to_tsvector('english', title || ' ' || coalesce(description, ''))", persisted=True),
-        nullable=True
+
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR(),
+        Computed(
+            "to_tsvector('english', coalesce(searchable_text, "
+            "lower(coalesce(title, '') || ' ' || coalesce(description, ''))))",
+            persisted=True,
+        ),
+        nullable=False,
     )
 
     # ----------------------------------------------------------------

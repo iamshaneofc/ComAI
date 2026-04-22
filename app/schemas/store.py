@@ -56,6 +56,12 @@ class StoreResponse(BaseModel):
     updated_at: datetime
 
 
+class StoreCreatedResponse(StoreResponse):
+    """Returned once after provisioning; includes the tenant API key."""
+
+    api_key: str
+
+
 class StoreSummary(BaseModel):
     """Lightweight response for list views."""
     model_config = {"from_attributes": True}

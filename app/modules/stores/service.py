@@ -10,17 +10,29 @@ Rules:
 import structlog
 from fastapi import Depends, HTTPException, status
 from python_slugify import slugify
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.shopify.sync import fetch_and_normalize_products
 from app.core.database import get_db
 from app.models.store import Store
+from app.modules.products.service import ProductService
 from app.repositories.store_repo import StoreRepository
 from app.schemas.store import StoreCreate, StoreUpdate
-from app.modules.products.service import ProductService
-from app.adapters.shopify.sync import fetch_and_normalize_products
 
 logger = structlog.get_logger(__name__)
+
+
+def _initial_credentials(data: StoreCreate) -> dict | None:
+    """Platform-specific secrets live under credentials (e.g. credentials.shopify.domain)."""
+    if not data.domain:
+        return None
+    domain_norm = data.domain.strip().lower()
+    creds: dict = {}
+    if data.platform == "shopify":
+        creds["shopify"] = {"domain": domain_norm}
+    else:
+        creds[data.platform] = {"domain": domain_norm}
+    return creds
 
 
 class StoreService:
@@ -41,22 +53,24 @@ class StoreService:
         Business rules:
             - Slug is auto-generated from name (unique)
             - Duplicate slugs get a numeric suffix
+            - Shopify/custom domain is stored only under credentials
         """
         base_slug = slugify(data.name)
 
-        # Ensure slug uniqueness
         slug = base_slug
         counter = 1
         while await self.repo.get_by_slug(slug):
             slug = f"{base_slug}-{counter}"
             counter += 1
 
+        credentials = _initial_credentials(data)
+
         store = Store(
             name=data.name,
             slug=slug,
             platform=data.platform,
-            shopify_domain=data.domain,
             whatsapp_phone_number=data.whatsapp_phone_number,
+            credentials=credentials,
         )
 
         created = await self.repo.create_store(store)
@@ -69,10 +83,7 @@ class StoreService:
 
     async def get_store(self, store_id) -> Store:
         """Fetch a store by UUID. Raises 404 if not found."""
-        result = await self.db.execute(
-            select(Store).where(Store.id == store_id)
-        )
-        store = result.scalar_one_or_none()
+        store = await self.repo.get_by_id(store_id)
         if store is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -98,7 +109,28 @@ class StoreService:
     async def update_store(self, store_id, data: StoreUpdate) -> Store:
         """Partial update — only provided fields are changed."""
         store = await self.get_store(store_id)
-        updates = data.model_dump(exclude_none=True)
+        raw = data.model_dump(exclude_none=True)
+        updates: dict = {}
+
+        if "domain" in raw:
+            domain = raw.pop("domain")
+            creds = dict(store.credentials or {})
+            if store.platform == "shopify":
+                shop = dict(creds.get("shopify") or {})
+                if domain is not None:
+                    shop["domain"] = str(domain).strip().lower()
+                creds["shopify"] = shop
+            else:
+                plat = dict(creds.get(store.platform) or {})
+                if domain is not None:
+                    plat["domain"] = str(domain).strip().lower()
+                creds[store.platform] = plat
+            updates["credentials"] = creds
+
+        for column in ("name", "whatsapp_phone_number", "is_active"):
+            if column in raw:
+                updates[column] = raw[column]
+
         if not updates:
             return store
         updated = await self.repo.update_store(store, updates)
@@ -127,18 +159,17 @@ class StoreService:
         creds = store.credentials.get("shopify", {}) if store.credentials else {}
         domain = creds.get("domain")
         access_token = creds.get("access_token")
-        
+
         if not domain or not access_token:
-            logger.error(f"Shopify credentials missing for store {store_id}")
+            logger.error("Shopify credentials missing for store", store_id=str(store_id))
             return 0
-            
+
         product_service = ProductService(self.db)
         total_synced = 0
-        
+
         async for normalized_products in fetch_and_normalize_products(store_id, domain, access_token):
             await product_service.bulk_upsert_products(store_id, normalized_products)
-            # Service explicitly controls the transaction boundary here for chunking
             await self.db.commit()
             total_synced += len(normalized_products)
-            
+
         return total_synced
