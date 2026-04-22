@@ -10,6 +10,7 @@ __pycache__/
 venv/
 env/
 ENV/
+.history/
 
 # Environment variables — NEVER commit these
 .env
