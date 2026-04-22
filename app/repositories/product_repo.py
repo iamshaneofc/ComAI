@@ -1,0 +1,170 @@
+"""
+Product Repository — all DB queries for the Product entity.
+
+Rules:
+    - Every method receives store_id (multi-tenancy enforced at DB level)
+    - No business logic — pure async SQLAlchemy queries
+    - search_products supports: keyword ILIKE, price range, category, tags
+"""
+from uuid import UUID
+
+from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY, insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.product import Product
+from app.repositories.base import BaseRepository
+from app.schemas.product import ProductSearchFilters
+
+
+class ProductRepository(BaseRepository[Product]):
+
+    def __init__(self, db: AsyncSession) -> None:
+        super().__init__(model=Product, db=db)
+
+    # ----------------------------------------------------------------
+    # Writes
+    # ----------------------------------------------------------------
+
+    async def create_product(self, product: Product) -> Product:
+        return await self.create(product)
+
+    async def upsert_products_bulk(self, products: list[Product]) -> None:
+        """Upsert multiple products utilizing ON CONFLICT to update."""
+        if not products:
+            return
+            
+        values = []
+        for p in products:
+            vals = {
+                "id": p.id,
+                "store_id": p.store_id,
+                "source_platform": p.source_platform,
+                "external_id": p.external_id,
+                "title": p.title,
+                "description": p.description,
+                "price": p.price,
+                "compare_price": p.compare_price,
+                "currency": p.currency,
+                "sku": p.sku,
+                "is_available": p.is_available,
+                "inventory_quantity": p.inventory_quantity,
+                "images": p.images,
+                "variants": p.variants,
+                "attributes": p.attributes,
+                "tags": p.tags,
+                "categories": p.categories,
+                "searchable_text": p.searchable_text,
+                "source": p.source,
+                "raw_data": p.raw_data,
+            }
+            values.append(vals)
+
+        stmt = insert(Product).values(values)
+        
+        # update fields except immutable ones
+        update_dict = {
+            c.name: c
+            for c in stmt.excluded
+            if c.name not in ("id", "store_id", "external_id", "created_at", "source_platform")
+        }
+        
+        # Ensure we set updated_at explicitly or if the model triggers handle it, we can safely depend on standard behaviour.
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["store_id", "external_id"],
+            set_=update_dict
+        )
+        
+        await self.db.execute(stmt)
+
+    async def upsert_product(self, product: Product) -> Product:
+        await self.upsert_products_bulk([product])
+        return product
+
+    async def bulk_insert_products(self, products: list[Product]) -> list[Product]:
+        """Insert multiple products in a single flush — efficient for sync jobs."""
+        for p in products:
+            self.db.add(p)
+        await self.db.flush()
+        for p in products:
+            await self.db.refresh(p)
+        return products
+
+    # ----------------------------------------------------------------
+    # Reads
+    # ----------------------------------------------------------------
+
+    async def get_by_external_id(
+        self, store_id: UUID, external_id: str
+    ) -> Product | None:
+        result = await self.db.execute(
+            select(Product).where(
+                Product.store_id == store_id,
+                Product.external_id == external_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def search_products(
+        self, store_id: UUID, filters: ProductSearchFilters
+    ) -> tuple[list[Product], int]:
+        """
+        Flexible product search with:
+            - keyword: ILIKE on searchable_text (covers title + desc + tags)
+            - price range: min_price / max_price
+            - category: ARRAY contains check
+            - is_available: default True
+        Returns (products, total_count)
+        """
+        conditions = [
+            Product.store_id == store_id,
+            Product.is_available == filters.is_available,
+        ]
+
+        # Keyword search using pre-built searchable_text
+        if filters.keyword:
+            conditions.append(
+                Product.searchable_text.ilike(f"%{filters.keyword}%")
+            )
+
+        # Price range
+        if filters.min_price is not None:
+            conditions.append(Product.price >= filters.min_price)
+        if filters.max_price is not None:
+            conditions.append(Product.price <= filters.max_price)
+
+        # Category filter (ARRAY contains)
+        if filters.category:
+            conditions.append(
+                Product.categories.contains(
+                    cast([filters.category], ARRAY(String))
+                )
+            )
+
+        # Tags filter — any tag matches
+        if filters.tags:
+            tag_conditions = [
+                Product.tags.contains(cast([t], ARRAY(String)))
+                for t in filters.tags
+            ]
+            conditions.append(or_(*tag_conditions))
+
+        where_clause = and_(*conditions)
+
+        # Total count
+        count_q = select(func.count()).select_from(Product).where(where_clause)
+        total_result = await self.db.execute(count_q)
+        total = total_result.scalar_one()
+
+        # Paginated products — cheapest first (good for "under X" queries)
+        products_q = (
+            select(Product)
+            .where(where_clause)
+            .order_by(Product.price.asc())
+            .offset(filters.offset)
+            .limit(filters.limit)
+        )
+        result = await self.db.execute(products_q)
+        products = list(result.scalars().all())
+
+        return products, total

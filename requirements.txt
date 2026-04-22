@@ -1,0 +1,57 @@
+# ============================================================
+# AI Commerce Platform — Core Requirements
+# Python 3.11+
+# ============================================================
+
+# --- Web Framework ---
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# --- Database ---
+sqlalchemy[asyncio]==2.0.30
+asyncpg==0.29.0
+alembic==1.13.1
+psycopg-binary          # For alembic env sync operations
+
+# --- Pydantic & Settings ---
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# --- Redis ---
+redis[hiredis]==5.0.4
+aioredis==2.0.1
+
+# --- Background Jobs ---
+celery==5.4.0
+flower==2.0.1                   # Celery monitoring UI
+
+# --- AI / LLM ---
+openai==1.30.1
+google-generativeai==0.7.0
+tiktoken==0.7.0
+sentence-transformers==2.7.0    # Local embedding fallback
+
+# --- Vector Search ---
+pgvector==0.2.5                 # pgvector SQLAlchemy integration
+
+# --- HTTP Clients ---
+httpx==0.27.0                   # Async HTTP (Shopify, Meta API)
+aiohttp==3.9.5                  # Websocket support
+
+# --- Auth & Security ---
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# --- Templating ---
+jinja2==3.1.4
+
+# --- Utilities ---
+structlog==24.2.0               # Structured logging
+python-slugify==8.0.4
+arrow==1.3.0                    # Datetime utilities
+tenacity==8.3.0                 # Retry logic
+
+# --- Validation ---
+email-validator==2.1.1
+phonenumbers==8.13.37

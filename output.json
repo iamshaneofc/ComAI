@@ -1,0 +1,30 @@
+﻿[
+  {
+    "query": "Hi there!",
+    "intent_detected": "greeting",
+    "price_limit_detected": null,
+    "products_retrieved": 0,
+    "ai_response": "Hello! Welcome to our store \ud83d\udc4b I'm your AI shopping assistant. Tell me what you're looking for..."
+  },
+  {
+    "query": "Where is my order?",
+    "intent_detected": "support",
+    "price_limit_detected": null,
+    "products_retrieved": 0,
+    "ai_response": "I understand you need some help. For order tracking, please check your email for order details."
+  },
+  {
+    "query": "Show me shoes under 3000 rs",
+    "intent_detected": "product_search",
+    "price_limit_detected": 3000.0,
+    "products_retrieved": 2,
+    "ai_response": "Sure! Here are some great options for you under \u20b93000:\n\n1. **Puma Sport Sneakers** \u2014 \u20b92500.0\n2. **Adidas Running Shoes** \u2014 \u20b92800.0\n\nBoth are excellent choices for comfort and style. Let me know if you need more information on either!"
+  },
+  {
+    "query": "I want shoes below 1000 inr",
+    "intent_detected": "product_search",
+    "price_limit_detected": 1000.0,
+    "products_retrieved": 0,
+    "ai_response": "I'm sorry, but it seems we don't have shoes available in that price range right now. Could you please refine your search or let me know if there's a specific style or type of shoe you're interested in? I'll do my best to assist you!"
+  }
+]
