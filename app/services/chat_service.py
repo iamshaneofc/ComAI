@@ -2,7 +2,7 @@
 ChatService — Phase 1 MVP (Product search + AI response).
 
 Flow:
-    query → intent detection → product retrieval → prompt build → LLM → response
+    query → intent detection → product retrieval → AgentResolver → prompt build → LLM → response
 
 What's NOT here yet (Phase 2):
     - Memory / conversation history
@@ -33,8 +33,9 @@ from app.ai.retrieval.retrieval import RetrievalEngine
 from app.core.database import get_db
 from app.modules.products.service import ProductService
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.user_service import UserService
+from app.services.agent_resolver import AgentResolver, AgentType
 from app.services.memory_service import MemoryService
+from app.services.user_service import UserService
 
 logger = structlog.get_logger(__name__)
 
@@ -67,7 +68,7 @@ class ChatService:
         self.db = db
         self.product_service = ProductService(db)
         self.retrieval = RetrievalEngine(self.product_service)
-        self.llm = get_llm_provider()
+        self._agent_resolver = AgentResolver()
         self.user_service = UserService(db)
         self.memory_service = MemoryService(db)
 
@@ -75,6 +76,7 @@ class ChatService:
         self,
         store_id,
         payload: ChatRequest,
+        agent_type: AgentType = "chat",
     ) -> ChatResponse:
         """
         End-to-end chat handler.
@@ -134,13 +136,29 @@ class ChatService:
             reply = FALLBACK_RESPONSE
 
         else:
-            # Build contextual prompt and call LLM
+            resolved = await self._agent_resolver.resolve(self.db, store_id, agent_type)
+            log.info(
+                "Agent config resolved",
+                agent_type=agent_type,
+                fallback_used=resolved.fallback_used,
+                provider=resolved.provider,
+            )
             prompt = build_prompt(
                 query=payload.message,
                 intent=intent,
                 products=products,
+                system_prompt=resolved.system_prompt,
             )
-            llm_result = await self.llm.generate(prompt)
+            llm = get_llm_provider(
+                provider=resolved.provider,
+                api_key=resolved.api_key,
+                model=resolved.model,
+            )
+            llm_result = await llm.generate(
+                prompt,
+                temperature=resolved.temperature,
+                system_prompt=resolved.system_prompt,
+            )
             reply = llm_result.text
 
         log.info("Chat response built", intent=intent.intent, products_count=len(products))

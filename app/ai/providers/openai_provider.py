@@ -21,31 +21,37 @@ logger = structlog.get_logger(__name__)
 class OpenAIProvider(BaseLLMProvider):
     """OpenAI GPT implementation — uses async client for non-blocking calls."""
 
-    def __init__(self) -> None:
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        self.model = settings.OPENAI_MODEL
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        key = api_key if api_key is not None else settings.OPENAI_API_KEY
+        self.client = AsyncOpenAI(api_key=key)
+        self.model = model if model is not None else settings.OPENAI_MODEL
         self.embedding_model = settings.OPENAI_EMBEDDING_MODEL
 
     async def generate(self, prompt: str, **kwargs) -> LLMResponse:
         """
         Send prompt to OpenAI and return structured response.
 
-        The prompt string is pre-built by PromptBuilder and contains
-        the full conversation context — we just need to complete it.
+        If ``system_prompt`` is passed in kwargs, it is sent as a separate system
+        message and ``prompt`` should be the user/context body only (no embedded
+        system block). Otherwise the legacy single user message is used.
         """
         max_tokens = kwargs.get("max_tokens", 512)
         temperature = kwargs.get("temperature", 0.7)
+        system_prompt = kwargs.get("system_prompt")
 
         logger.debug("Calling OpenAI", model=self.model, max_tokens=max_tokens)
 
+        if system_prompt:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+        else:
+            messages = [{"role": "user", "content": prompt}]
+
         response = await self.client.chat.completions.create(
             model=self.model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
         )

@@ -15,8 +15,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # Import ALL models so Alembic can detect schema changes
 from app.core.config import settings
 from app.models.base import Base
-from app.models.store import Store       # noqa: F401
+from app.models.store import Store  # noqa: F401
 from app.models.product import Product  # noqa: F401
+from app.models.store_ai_config import StoreAIConfig  # noqa: F401
+from app.models.agent import Agent  # noqa: F401
 
 # Alembic config object (reads alembic.ini)
 config = context.config

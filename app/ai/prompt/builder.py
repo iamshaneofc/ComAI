@@ -23,19 +23,27 @@ def build_prompt(
     query: str,
     intent: IntentResult,
     products: list[ProductSummary],
+    system_prompt: str | None = None,
 ) -> str:
     """
     Build a complete LLM prompt.
 
     Structure:
-        [System] → role definition
+        [System] → role definition (embedded only when system_prompt is None)
         [Context] → products if any
         [User] → original query
+
+    When ``system_prompt`` is set, the system role is omitted here so the caller
+    can pass it as a native ``system`` message (e.g. OpenAI chat completions).
+    When ``system_prompt`` is None, behaviour matches the original single-string prompt.
     """
     # ----------------------------------------------------------------
     # System role
     # ----------------------------------------------------------------
-    prompt_parts = [f"System: {SYSTEM_PROMPT}\n"]
+    if system_prompt is None:
+        prompt_parts = [f"System: {SYSTEM_PROMPT}\n"]
+    else:
+        prompt_parts = []
 
     # ----------------------------------------------------------------
     # Intent-specific context
