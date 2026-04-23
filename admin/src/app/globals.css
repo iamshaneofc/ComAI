@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-surface text-ink antialiased;
+}
+
+html.dark body {
+  @apply bg-slate-950 text-slate-100;
+}

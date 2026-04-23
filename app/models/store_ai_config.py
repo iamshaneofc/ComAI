@@ -5,7 +5,7 @@ Secrets live in api_key_encrypted; use app.core.field_crypto to encrypt/decrypt.
 """
 import uuid
 
-from sqlalchemy import ForeignKey, LargeBinary, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, LargeBinary, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,7 +14,10 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 
 class StoreAIConfig(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "store_ai_configs"
-    __table_args__ = (UniqueConstraint("store_id", name="uq_store_ai_configs_store_id"),)
+    __table_args__ = (
+        UniqueConstraint("store_id", name="uq_store_ai_configs_store_id"),
+        CheckConstraint("provider IN ('openai', 'gemini')", name="ck_store_ai_configs_provider"),
+    )
 
     store_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

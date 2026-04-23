@@ -2,7 +2,7 @@
 ChatService — Phase 1 MVP (Product search + AI response).
 
 Flow:
-    query → intent detection → product retrieval → AgentResolver → prompt build → LLM → response
+    query → intent detection → product retrieval → AgentService → prompt build → LLM → response
 
 What's NOT here yet (Phase 2):
     - Memory / conversation history
@@ -23,17 +23,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.intent.detector import (
     INTENT_GENERAL,
     INTENT_GREETING,
+    INTENT_PRICE_FILTER,
     INTENT_PRODUCT_SEARCH,
     INTENT_SUPPORT,
     detect_intent,
 )
-from app.ai.prompt.builder import build_prompt
+from app.ai.prompt.builder import build_prompt, format_memory_context_for_prompt
 from app.ai.providers.factory import get_llm_provider
 from app.ai.retrieval.retrieval import RetrievalEngine
 from app.core.database import get_db
 from app.modules.products.service import ProductService
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.agent_resolver import AgentResolver, AgentType
+from app.services.agent_service import AgentService, AgentType
 from app.services.memory_service import MemoryService
 from app.services.user_service import UserService
 
@@ -68,7 +69,7 @@ class ChatService:
         self.db = db
         self.product_service = ProductService(db)
         self.retrieval = RetrievalEngine(self.product_service)
-        self._agent_resolver = AgentResolver()
+        self._agent_service = AgentService(db)
         self.user_service = UserService(db)
         self.memory_service = MemoryService(db)
 
@@ -105,12 +106,13 @@ class ChatService:
 
         # ── Step 2: Retrieve products ──────────────────────────────
         products = []
-        if intent.intent in (INTENT_PRODUCT_SEARCH, INTENT_PRICE_FILTER := "price_filter"):
+        if intent.intent in (INTENT_PRODUCT_SEARCH, INTENT_PRICE_FILTER):
+            # Retrieval returns up to 3 DB-backed products for product_search (see RetrievalEngine).
             products = await self.retrieval.get_products_for_query(
                 query=payload.message,
                 intent=intent,
                 store_id=store_id,
-                user_preferences=user_preferences
+                user_preferences=user_preferences,
             )
             # Track event
             if user:
@@ -136,18 +138,20 @@ class ChatService:
             reply = FALLBACK_RESPONSE
 
         else:
-            resolved = await self._agent_resolver.resolve(self.db, store_id, agent_type)
+            resolved = await self._agent_service.resolve_agent(store_id, agent_type)
             log.info(
-                "Agent config resolved",
+                "LLM request",
+                agent_id=str(resolved.agent_id) if resolved.agent_id else None,
                 agent_type=agent_type,
-                fallback_used=resolved.fallback_used,
-                provider=resolved.provider,
+                model=resolved.model,
             )
+            memory_context = format_memory_context_for_prompt(user_preferences)
             prompt = build_prompt(
                 query=payload.message,
                 intent=intent,
                 products=products,
                 system_prompt=resolved.system_prompt,
+                memory_context=memory_context,
             )
             llm = get_llm_provider(
                 provider=resolved.provider,

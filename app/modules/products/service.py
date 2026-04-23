@@ -10,6 +10,7 @@ Rules:
 import structlog
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import UUID
 
 from app.core.database import get_db
 from app.core.tenant import ensure_products_single_tenant, ensure_row_store_id
@@ -22,6 +23,18 @@ from app.schemas.product import (
     ProductSearchFilters,
     ProductSummary,
 )
+
+
+def _benefit_snippet(description: str | None, tags: list[str] | None) -> str | None:
+    """Single short line from DB only — no LLM, for chat cards."""
+    if description and description.strip():
+        s = " ".join(description.split())
+        if len(s) > 140:
+            return f"{s[:137].rstrip()}..."
+        return s
+    if tags:
+        return "Highlights: " + ", ".join(str(t) for t in tags[:4] if t)
+    return None
 
 logger = structlog.get_logger(__name__)
 
@@ -199,6 +212,7 @@ class ProductService:
         max_price: float | None = None,
         categories: list[str] | None = None,
         limit: int = 5,
+        exclude_product_ids: list[UUID] | None = None,
     ) -> list[ProductSummary]:
         """
         Focused search for the chat engine.
@@ -209,8 +223,21 @@ class ProductService:
             max_price=max_price,
             category=categories[0] if categories else None,
             limit=limit,
+            exclude_product_ids=exclude_product_ids or None,
         )
         products, _ = await self.repo.search_products(store_id, filters)
         for p in products:
             ensure_row_store_id(row_store_id=p.store_id, store_id=store_id, label="product")
-        return [ProductSummary.model_validate(p) for p in products]
+        return [
+            ProductSummary(
+                id=p.id,
+                title=p.title,
+                price=float(p.price),
+                currency=p.currency or "INR",
+                images=p.images,
+                tags=p.tags,
+                is_available=p.is_available,
+                benefit_snippet=_benefit_snippet(p.description, p.tags),
+            )
+            for p in products
+        ]

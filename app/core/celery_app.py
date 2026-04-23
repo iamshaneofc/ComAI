@@ -28,9 +28,11 @@ celery_app.conf.update(
     task_routes={
         "app.tasks.automation_tasks.*": {"queue": "default"},
         "app.tasks.message_tasks.*": {"queue": "default"},
+        "app.tasks.onboarding_tasks.*": {"queue": "default"},
     },
 )
 
 # Register task modules (worker entrypoint: celery -A app.core.celery_app worker)
 import app.tasks.automation_tasks  # noqa: E402, F401
 import app.tasks.message_tasks  # noqa: E402, F401
+import app.tasks.onboarding_tasks  # noqa: E402, F401

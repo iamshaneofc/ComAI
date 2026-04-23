@@ -48,6 +48,10 @@ class ProductSearchFilters(BaseModel):
     is_available: bool = True
     limit: int = Field(10, ge=1, le=50)
     offset: int = Field(0, ge=0)
+    exclude_product_ids: list[UUID] | None = Field(
+        default=None,
+        description="Exclude these product ids (e.g. when backfilling search results).",
+    )
 
 
 # ----------------------------------------------------------------
@@ -90,6 +94,11 @@ class ProductSummary(BaseModel):
     images: list[dict] | None
     tags: list[str] | None
     is_available: bool
+    benefit_snippet: str | None = Field(
+        default=None,
+        description="Short line from DB description or tags — for grounded chat formatting only.",
+        max_length=200,
+    )
 
 
 class PaginatedProducts(BaseModel):

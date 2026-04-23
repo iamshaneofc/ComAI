@@ -5,8 +5,8 @@ Uses Fernet with a key derived deterministically from APP_SECRET_KEY (SHA-256 di
 url-safe base64-encoded to 32 bytes). Rotating APP_SECRET_KEY invalidates stored keys;
 re-encrypt tenant keys after rotation.
 
-If api_key_encrypted is NULL or decryption fails, AgentResolver falls back to env vars
-(OPENAI_API_KEY, GEMINI_API_KEY, etc.) — see app.services.agent_resolver.
+If api_key_encrypted is NULL or decryption fails, AgentService falls back to env vars
+(OPENAI_API_KEY, GEMINI_API_KEY, etc.) — see app.services.agent_service.
 """
 from __future__ import annotations
 

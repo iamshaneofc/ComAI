@@ -6,11 +6,15 @@ Tenant mutations use only `/stores/me` — no store UUID in path or query (canno
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
 
 from app.api.dependencies import verify_provision_secret
+from app.modules.stores.onboarding_service import StoreOnboardingService
 from app.modules.stores.service import StoreService
 from app.schemas.store import (
     PaginatedStores,
     StoreCreate,
     StoreCreatedResponse,
+    StoreMeStatusResponse,
+    StoreOnboardRequest,
+    StoreOnboardResponse,
     StoreResponse,
     StoreSummary,
     StoreUpdate,
@@ -36,6 +40,25 @@ async def create_store(
     return StoreCreatedResponse.model_validate(store)
 
 
+@provision_router.post(
+    "/onboard",
+    response_model=StoreOnboardResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Onboard a Shopify store (credentials + sync + default chat agent)",
+    dependencies=[Depends(verify_provision_secret)],
+)
+async def onboard_store(
+    payload: StoreOnboardRequest,
+    service: StoreOnboardingService = Depends(StoreOnboardingService),
+) -> StoreOnboardResponse:
+    """
+    Validates Shopify domain and Admin API token, stores credentials under ``credentials.shopify``,
+    then queues Celery work to sync products and create an active default **chat** agent with an
+    auto-generated ``system_prompt`` (no manual prompt authoring required).
+    """
+    return await service.onboard_shopify(payload)
+
+
 @tenant_router.get(
     "/me",
     response_model=StoreResponse,
@@ -43,6 +66,18 @@ async def create_store(
 )
 async def get_current_store(request: Request) -> StoreResponse:
     return StoreResponse.model_validate(request.state.store)
+
+
+@tenant_router.get(
+    "/me/status",
+    response_model=StoreMeStatusResponse,
+    summary="Onboarding progress (status, product count, chat agent ready)",
+)
+async def get_store_onboarding_status(
+    request: Request,
+    service: StoreService = Depends(StoreService),
+) -> StoreMeStatusResponse:
+    return await service.get_me_onboarding_status(request.state.store.id)
 
 
 @tenant_router.patch(

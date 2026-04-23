@@ -10,10 +10,17 @@ from uuid import UUID
 
 import structlog
 
-from app.ai.intent.detector import IntentResult
+from app.ai.intent.detector import (
+    INTENT_PRICE_FILTER,
+    INTENT_PRODUCT_SEARCH,
+    IntentResult,
+)
 from app.schemas.product import ProductSummary
 
 logger = structlog.get_logger(__name__)
+
+# Product-search chat: always surface up to this many DB-backed items in context.
+PRODUCT_SEARCH_CONTEXT_LIMIT = 3
 
 
 class RetrievalEngine:
@@ -39,38 +46,50 @@ class RetrievalEngine:
         intent: IntentResult,
         store_id: UUID,
         limit: int = 5,
-        user_preferences: dict | None = None
+        user_preferences: dict | None = None,
     ) -> list[ProductSummary]:
         """
         Retrieves relevant products based on the parsed intent.
 
         Strategy:
-            1. Use extracted keywords as search term
+            1. Use extracted keywords as search term (joined for product_search)
             2. Apply price_limit if detected
             3. Scope to detected categories if any
+            4. For product_search / price_filter: always aim for up to PRODUCT_SEARCH_CONTEXT_LIMIT
+               rows from the DB, broadening the query if the first pass returns fewer.
         """
-        if not intent.keywords and not intent.categories and intent.price_limit is None:
+        is_product_intent = intent.intent in (INTENT_PRODUCT_SEARCH, INTENT_PRICE_FILTER)
+        effective_limit = PRODUCT_SEARCH_CONTEXT_LIMIT if is_product_intent else limit
+
+        no_signals = (
+            not intent.keywords and not intent.categories and intent.price_limit is None
+        )
+        if no_signals and not is_product_intent:
             logger.debug("No retrieval signals in intent, skipping product fetch")
             return []
 
-        # Use the most meaningful keyword (longest word — likely the product type)
-        keyword = max(intent.keywords, key=len) if intent.keywords else None
-        
-        categories = intent.categories
+        # Product search: phrase-style keyword improves recall vs single token.
+        if intent.keywords:
+            if is_product_intent:
+                joined = " ".join(intent.keywords).strip()
+                keyword = (joined[:120] or None) if joined else None
+            else:
+                keyword = max(intent.keywords, key=len)
+        else:
+            keyword = None
+
+        categories = list(intent.categories) if intent.categories else []
         max_price = intent.price_limit
-        
+
         # Apply Personalization Layer
         if user_preferences:
             pref_categories = user_preferences.get("top_categories", [])
-            
-            # If user has no explicit category in query but has strong historical preferences, inject it
+
             if not categories and pref_categories:
                 categories = [pref_categories[0]]
-            # If user has explicit categories, append preferenced category to expand search appropriately
             elif categories and pref_categories and pref_categories[0] not in categories:
                 categories.append(pref_categories[0])
-                
-            # If explicit max_price not set, fall back to historical average limit if established
+
             pref_price = user_preferences.get("avg_price_limit")
             if max_price is None and pref_price:
                 max_price = pref_price
@@ -80,8 +99,29 @@ class RetrievalEngine:
             keyword=keyword,
             max_price=max_price,
             categories=categories if categories else None,
-            limit=limit,
+            limit=effective_limit,
         )
+
+        if is_product_intent and len(products) < effective_limit:
+            need = effective_limit - len(products)
+            exclude = [p.id for p in products]
+            extra = await self.product_service.get_products_for_chat(
+                store_id=store_id,
+                keyword=None,
+                max_price=max_price,
+                categories=categories if categories else None,
+                limit=need,
+                exclude_product_ids=exclude or None,
+            )
+            seen = {p.id for p in products}
+            for p in extra:
+                if p.id not in seen:
+                    products.append(p)
+                    seen.add(p.id)
+                if len(products) >= effective_limit:
+                    break
+
+        products = products[:effective_limit]
 
         logger.info(
             "Products retrieved",
@@ -89,5 +129,6 @@ class RetrievalEngine:
             keyword=keyword,
             max_price=intent.price_limit,
             store_id=str(store_id),
+            intent=intent.intent,
         )
         return products

@@ -1,18 +1,31 @@
 # Makefile — Developer shortcuts
+#
+# Full stack: Postgres + Redis + API + Celery worker.
+# - Docker: make up  (see docker-compose.yml)
+# - Manual (if Docker is unavailable): start Postgres & Redis locally, set .env,
+#     then in two terminals:  make dev    and   make worker
 
-.PHONY: dev worker beat test lint format migrate seed
+.PHONY: dev worker beat test lint format migrate seed up down logs check-local run-local
 
-## Run FastAPI dev server
+## Verify Postgres + Redis TCP ports (no Docker)
+check-local:
+	python scripts/check_local_services.py
+
+## Migrate then start API + Celery as PowerShell background jobs (Windows; needs Postgres + Redis)
+run-local:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run_local.ps1
+
+## Run FastAPI dev server (same as: uvicorn app.main:app --reload)
 dev:
-	uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-## Run Celery worker
+## Run Celery worker (broker/backend from .env — default redis://localhost:6379/...)
 worker:
-	celery -A app.workers.celery_app worker --loglevel=info
+	python -m celery -A app.core.celery_app worker --loglevel=info
 
 ## Run Celery beat scheduler
 beat:
-	celery -A app.workers.celery_app beat --loglevel=info
+	python -m celery -A app.core.celery_app beat --loglevel=info
 
 ## Run all tests with coverage
 test:
@@ -40,14 +53,14 @@ migration:
 seed:
 	python scripts/seed_database.py
 
-## Start all services with docker-compose
+## Start Postgres, Redis, API, Celery worker (Docker Compose v2)
 up:
-	docker-compose up -d
+	docker compose up -d --build
 
 ## Stop all services
 down:
-	docker-compose down
+	docker compose down
 
-## View logs
+## View API container logs (service name: backend)
 logs:
-	docker-compose logs -f api
+	docker compose logs -f backend

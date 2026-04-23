@@ -180,6 +180,9 @@ class ProductRepository(BaseRepository[Product]):
             ]
             conditions.append(or_(*tag_conditions))
 
+        if filters.exclude_product_ids:
+            conditions.append(Product.id.notin_(filters.exclude_product_ids))
+
         where_clause = and_(*conditions)
 
         # Total count
@@ -199,3 +202,33 @@ class ProductRepository(BaseRepository[Product]):
         products = list(result.scalars().all())
 
         return products, total
+
+    async def sample_product_categories(self, store_id: UUID, row_limit: int = 60) -> list[str]:
+        """Flatten distinct category labels from recent product rows (for prompt generation)."""
+        result = await self.db.execute(
+            select(Product.categories)
+            .where(
+                Product.store_id == store_id,
+                Product.categories.isnot(None),
+            )
+            .limit(row_limit)
+        )
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for cats in result.scalars().all():
+            if not cats:
+                continue
+            for c in cats:
+                if not c:
+                    continue
+                k = str(c).strip().lower()
+                if k and k not in seen:
+                    seen.add(k)
+                    ordered.append(str(c).strip())
+        return ordered[:20]
+
+    async def count_for_store(self, store_id: UUID) -> int:
+        result = await self.db.execute(
+            select(func.count()).select_from(Product).where(Product.store_id == store_id)
+        )
+        return int(result.scalar_one())

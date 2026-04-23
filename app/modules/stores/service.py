@@ -12,12 +12,20 @@ from fastapi import Depends, HTTPException, status
 from python_slugify import slugify
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from uuid import UUID
+
 from app.adapters.shopify.sync import fetch_and_normalize_products
 from app.core.database import get_db
+from app.core.onboarding import (
+    ALLOWED_ONBOARDING_STATUSES,
+    ONBOARDING_CREATED,
+)
 from app.models.store import Store
 from app.modules.products.service import ProductService
+from app.repositories.agent_repo import AgentRepository
+from app.repositories.product_repo import ProductRepository
 from app.repositories.store_repo import StoreRepository
-from app.schemas.store import StoreCreate, StoreUpdate
+from app.schemas.store import StoreCreate, StoreMeStatusResponse, StoreUpdate
 
 logger = structlog.get_logger(__name__)
 
@@ -71,6 +79,7 @@ class StoreService:
             platform=data.platform,
             whatsapp_phone_number=data.whatsapp_phone_number,
             credentials=credentials,
+            onboarding_status=ONBOARDING_CREATED,
         )
 
         created = await self.repo.create_store(store)
@@ -173,3 +182,30 @@ class StoreService:
             total_synced += len(normalized_products)
 
         return total_synced
+
+    # ----------------------------------------------------------------
+    # Onboarding status
+    # ----------------------------------------------------------------
+
+    async def update_onboarding_status(self, store_id: UUID, status: str) -> None:
+        """Persist onboarding lifecycle state (no HTTP semantics)."""
+        if status not in ALLOWED_ONBOARDING_STATUSES:
+            raise ValueError(f"Invalid onboarding_status: {status}")
+        store = await self.repo.get_by_id(store_id)
+        if store is None:
+            logger.warning("update_onboarding_status: store not found", store_id=str(store_id))
+            return
+        await self.repo.update_store(store, {"onboarding_status": status})
+
+    async def get_me_onboarding_status(self, store_id: UUID) -> StoreMeStatusResponse:
+        """Aggregate progress for GET /stores/me/status."""
+        store = await self.get_store(store_id)
+        products = ProductRepository(self.db)
+        agents = AgentRepository(self.db)
+        products_count = await products.count_for_store(store_id)
+        chat_agent = await agents.get_by_type(store_id, "chat")
+        return StoreMeStatusResponse(
+            onboarding_status=store.onboarding_status,  # type: ignore[arg-type]
+            products_count=products_count,
+            agent_ready=chat_agent is not None,
+        )
