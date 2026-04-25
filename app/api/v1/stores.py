@@ -3,7 +3,8 @@ Stores API — provisioning (master secret) + tenant-scoped management (API key)
 
 Tenant mutations use only `/stores/me` — no store UUID in path or query (cannot be spoofed).
 """
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, status
+import structlog
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.api.dependencies import verify_provision_secret
 from app.modules.stores.onboarding_service import StoreOnboardingService
@@ -19,9 +20,11 @@ from app.schemas.store import (
     StoreSummary,
     StoreUpdate,
 )
+from app.tasks.onboarding_tasks import sync_store_products_task
 
 provision_router = APIRouter()
 tenant_router = APIRouter()
+logger = structlog.get_logger(__name__)
 
 
 @provision_router.post(
@@ -44,7 +47,7 @@ async def create_store(
     "/onboard",
     response_model=StoreOnboardResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Onboard a Shopify store (credentials + sync + default chat agent)",
+    summary="Onboard a store (Shopify or custom JSON feed) and start sync",
     dependencies=[Depends(verify_provision_secret)],
 )
 async def onboard_store(
@@ -52,11 +55,13 @@ async def onboard_store(
     service: StoreOnboardingService = Depends(StoreOnboardingService),
 ) -> StoreOnboardResponse:
     """
-    Validates Shopify domain and Admin API token, stores credentials under ``credentials.shopify``,
-    then queues Celery work to sync products and create an active default **chat** agent with an
-    auto-generated ``system_prompt`` (no manual prompt authoring required).
+    Stores platform credentials and queues Celery work to sync products and create
+    an active default **chat** agent.
+
+    - Shopify minimum: ``platform=shopify`` + ``domain``.
+    - Custom minimum: ``platform=custom`` + ``domain`` + ``custom_products_url``.
     """
-    return await service.onboard_shopify(payload)
+    return await service.onboard_store(payload)
 
 
 @tenant_router.get(
@@ -111,12 +116,17 @@ async def deactivate_current_store(request: Request, service: StoreService = Dep
 )
 async def sync_current_store_products(
     request: Request,
-    background_tasks: BackgroundTasks,
     service: StoreService = Depends(StoreService),
 ):
     sid = request.state.store.id
-    background_tasks.add_task(service.sync_store_products, sid)
-    return {"status": "sync_started", "store_id": sid}
+    await service.get_store(sid)
+    status_label = "sync_queued"
+    try:
+        sync_store_products_task.apply_async(args=(str(sid),), retry=False)
+    except Exception as exc:
+        status_label = "sync_enqueue_failed"
+        logger.error("Failed to enqueue sync task", store_id=str(sid), error=str(exc))
+    return {"status": status_label, "store_id": sid}
 
 
 @tenant_router.get(

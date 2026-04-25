@@ -23,7 +23,7 @@ class AutomationService:
         self.decision_engine = DecisionEngine()
         self.whatsapp_service = WhatsAppService()
 
-    async def evaluate_user(self, store_id: UUID, user_id: UUID):
+    async def evaluate_user(self, store_id: UUID, user_id: UUID, task_id: str | None = None):
         """
         Main pipeline: Event -> ranked triggers -> dedupe -> Decision -> Action.
 
@@ -38,7 +38,10 @@ class AutomationService:
 
         try:
             structlog.contextvars.bind_contextvars(
-                flow="automation", store_id=str(store_id), user_id=str(user_id)
+                flow="automation",
+                store_id=str(store_id),
+                user_id=str(user_id),
+                celery_task_id=task_id,
             )
 
             trace("context_bound", store_id=str(store_id), user_id=str(user_id))
@@ -171,7 +174,13 @@ class AutomationService:
             trace("exit_all_candidates_exhausted")
 
         except Exception as e:
-            logger.exception("Automation evaluation failed", error=str(e), path=list(path))
+            logger.exception(
+                "Automation evaluation failed",
+                error=str(e),
+                path=list(path),
+                celery_task_id=task_id,
+            )
+            raise
 
     async def execute_action(
         self, store_id: UUID, action: dict, user_id: UUID, path: list | None = None
@@ -218,8 +227,21 @@ class AutomationService:
                         str(user_id),
                         ",".join(str(p.id) for p in full_products),
                     )
-                    send_whatsapp_message.delay(phone, message, idempotency_key=send_idem)
-                    return True
+                    try:
+                        send_whatsapp_message.apply_async(
+                            args=(phone, message),
+                            kwargs={"idempotency_key": send_idem},
+                            retry=False,
+                        )
+                        return True
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to enqueue WhatsApp message task",
+                            store_id=str(store_id),
+                            user_id=str(user_id),
+                            error=str(exc),
+                        )
+                        return False
 
                 logger.warning(
                     "Cannot send WhatsApp: missing phone or products",

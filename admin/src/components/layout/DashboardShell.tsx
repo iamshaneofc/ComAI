@@ -6,6 +6,7 @@ import { TopBar } from "./TopBar";
 
 const TITLES: Record<string, string> = {
   "/store-setup": "Store Setup",
+  "/platform-stores": "All stores (platform)",
   "/products": "Products",
   "/chat": "Chat Testing",
   "/agents": "Agents",

@@ -32,4 +32,8 @@ def get_llm_provider(
         from app.ai.providers.gemini_provider import GeminiProvider
 
         return GeminiProvider(api_key=api_key, model=model)
+    if name == "mock":
+        from app.ai.providers.mock_provider import MockProvider
+
+        return MockProvider(model=model)
     raise ValueError(f"Unknown LLM provider: {name}")

@@ -35,10 +35,11 @@ class RetrievalEngine:
         list[ProductSummary] — ready for prompt builder and chat response
     """
 
-    def __init__(self, product_service) -> None:
+    def __init__(self, product_service, store_context_service=None) -> None:
         # product_service is passed in by ChatService — NOT imported here
         # This keeps the AI layer decoupled from FastAPI's DI system
         self.product_service = product_service
+        self.store_context_service = store_context_service
 
     async def get_products_for_query(
         self,
@@ -132,3 +133,8 @@ class RetrievalEngine:
             intent=intent.intent,
         )
         return products
+
+    async def get_store_context_for_query(self, store_id: UUID) -> list[str]:
+        if self.store_context_service is None:
+            return []
+        return await self.store_context_service.get_retrieval_context(store_id)

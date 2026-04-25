@@ -9,6 +9,7 @@ import structlog
 from sqlalchemy import update
 
 from app.core.celery_app import celery_app
+from app.core.celery_retry import retry_countdown_seconds
 from app.core.database import AsyncSessionLocal
 from app.core.onboarding import ONBOARDING_FAILED, ONBOARDING_READY, ONBOARDING_SYNCING
 from app.models.agent import Agent
@@ -17,14 +18,25 @@ from app.repositories.agent_repo import AgentRepository
 from app.repositories.product_repo import ProductRepository
 from app.repositories.store_repo import StoreRepository
 from app.services.prompt_generator_service import PromptGeneratorService
+from app.services.store_context_service import StoreContextService
 from app.tasks.task_logging import log_task_failed, log_task_started, log_task_succeeded
 
 MAX_RETRIES = 3
+SYNC_MAX_RETRIES = 5
+_worker_loop: asyncio.AbstractEventLoop | None = None
 
 logger = structlog.get_logger(__name__)
 
 # Onboard API uses friendly|professional|playful; Agent rows use friendly|premium|aggressive.
 _ONBOARD_TO_AGENT_TONE = {"friendly": "friendly", "professional": "premium", "playful": "aggressive"}
+
+
+def _run_on_worker_loop(coro):
+    global _worker_loop
+    if _worker_loop is None or _worker_loop.is_closed():
+        _worker_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_worker_loop)
+    return _worker_loop.run_until_complete(coro)
 
 
 async def _persist_onboarding_failed(store_id: UUID) -> None:
@@ -55,6 +67,8 @@ async def _complete_onboarding_async(
 
         products = ProductRepository(session)
         categories = await products.sample_product_categories(store_id)
+        context_service = StoreContextService(session)
+        prompt_context = await context_service.get_prompt_context(store_id)
 
         agent_tone = _ONBOARD_TO_AGENT_TONE.get(tone, "friendly")
         prompt = PromptGeneratorService.build_chat_system_prompt(
@@ -64,6 +78,9 @@ async def _complete_onboarding_async(
             industry_hint=industry_hint,
             goal="sales",
             language=None,
+            policies=prompt_context.get("policies"),
+            faqs=prompt_context.get("faqs"),
+            tone_hint=prompt_context.get("tone_hint"),
         )
 
         await session.execute(
@@ -114,7 +131,7 @@ def complete_store_onboarding(
     log_task_started(task_name, task_id=task_id, idempotency_key=None, store_id=store_id)
 
     try:
-        asyncio.run(_complete_onboarding_async(UUID(store_id), tone, industry_hint))
+        _run_on_worker_loop(_complete_onboarding_async(UUID(store_id), tone, industry_hint))
     except Exception as exc:
         will_retry = self.request.retries < self.max_retries
         log_task_failed(
@@ -127,7 +144,7 @@ def complete_store_onboarding(
         )
         if not will_retry:
             try:
-                asyncio.run(_persist_onboarding_failed(UUID(store_id)))
+                _run_on_worker_loop(_persist_onboarding_failed(UUID(store_id)))
             except Exception as mark_exc:
                 logger.error(
                     "Could not persist onboarding failed status",
@@ -139,3 +156,49 @@ def complete_store_onboarding(
         raise
 
     log_task_succeeded(task_name, task_id=task_id, idempotency_key=None, store_id=store_id)
+
+
+async def _sync_store_products_async(store_id: UUID) -> int:
+    async with AsyncSessionLocal() as session:
+        try:
+            svc = StoreService(db=session)
+            synced = await svc.sync_store_products(store_id)
+            await session.commit()
+            return synced
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@celery_app.task(bind=True, max_retries=SYNC_MAX_RETRIES, acks_late=True)
+def sync_store_products_task(self, store_id: str) -> None:
+    task_name = self.name
+    task_id = self.request.id
+    log_task_started(task_name, task_id=task_id, idempotency_key=None, store_id=store_id)
+
+    try:
+        synced = _run_on_worker_loop(_sync_store_products_async(UUID(store_id)))
+    except Exception as exc:
+        will_retry = self.request.retries < self.max_retries
+        log_task_failed(
+            task_name,
+            task_id=task_id,
+            idempotency_key=None,
+            exc=exc,
+            will_retry=will_retry,
+            store_id=store_id,
+        )
+        if will_retry:
+            raise self.retry(
+                exc=exc,
+                countdown=retry_countdown_seconds(self.request.retries),
+            ) from exc
+        raise
+
+    log_task_succeeded(
+        task_name,
+        task_id=task_id,
+        idempotency_key=None,
+        store_id=store_id,
+        products_synced=synced,
+    )

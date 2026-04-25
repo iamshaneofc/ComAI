@@ -9,7 +9,6 @@ from app.adapters.shopify.webhook_handler import verify_and_normalize_webhook
 from app.core.database import get_db
 from app.modules.products.service import ProductService
 from app.modules.stores.service import StoreService
-from app.repositories.store_repo import StoreRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -50,14 +49,17 @@ async def shopify_product_webhook(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    repo = StoreRepository(db)
-    store = await repo.get_by_domain(shop_domain)
+    store_service = StoreService(db)
+    store = await store_service.get_store_by_shop_domain(shop_domain)
     if store is None:
         raise HTTPException(status_code=404, detail="Unknown shop domain")
 
-    creds = store.credentials.get("shopify", {}) if store.credentials else {}
-    webhook_secret = creds.get("webhook_secret")
-    configured_domain = _normalize_shop_domain(str(creds.get("domain") or ""))
+    configured_domain, _, webhook_secret = store_service.get_decrypted_shopify_credentials(store)
+    configured_domain = _normalize_shop_domain(str(configured_domain or ""))
+    if not webhook_secret:
+        logger.error("Shopify webhook secret missing or invalid", store_id=str(store.id))
+        raise HTTPException(status_code=401, detail="Webhook secret not configured")
+
     if configured_domain and shop_domain != configured_domain:
         logger.warning(
             "Shopify domain header mismatch",

@@ -19,11 +19,26 @@ from app.tasks.task_logging import (
 )
 
 MAX_RETRIES = 5
+_worker_loop: asyncio.AbstractEventLoop | None = None
 
 logger = structlog.get_logger(__name__)
 
 
-async def _evaluate_user_async(store_id: UUID, user_id: UUID) -> None:
+def _run_on_worker_loop(coro):
+    """
+    Run async code on a persistent loop in this worker process.
+
+    This avoids asyncpg "Future attached to a different loop" failures on
+    Windows/solo workers when tasks are executed repeatedly.
+    """
+    global _worker_loop
+    if _worker_loop is None or _worker_loop.is_closed():
+        _worker_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_worker_loop)
+    return _worker_loop.run_until_complete(coro)
+
+
+async def _evaluate_user_async(store_id: UUID, user_id: UUID, task_id: str | None = None) -> None:
     from app.modules.automation.service import AutomationService
     from app.repositories.user_repo import UserRepository
 
@@ -33,7 +48,7 @@ async def _evaluate_user_async(store_id: UUID, user_id: UUID) -> None:
                 logger.warning("Automation task skipped: user not in tenant", store_id=str(store_id))
                 return
             svc = AutomationService(session)
-            await svc.evaluate_user(store_id, user_id)
+            await svc.evaluate_user(store_id, user_id, task_id=task_id)
             await session.commit()
         except Exception:
             await session.rollback()
@@ -86,7 +101,7 @@ def evaluate_user_automation(
         )
 
     try:
-        asyncio.run(_evaluate_user_async(UUID(store_id), UUID(user_id)))
+        _run_on_worker_loop(_evaluate_user_async(UUID(store_id), UUID(user_id), task_id=task_id))
     except Exception as exc:
         idem.release_lease()
         will_retry = self.request.retries < self.max_retries

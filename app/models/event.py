@@ -2,7 +2,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import ForeignKey, Index, String
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -11,7 +11,12 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 class Event(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "events"
 
-    store_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

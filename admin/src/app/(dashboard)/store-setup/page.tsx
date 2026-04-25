@@ -42,7 +42,8 @@ export default function StoreSetupPage() {
   const [name, setName] = useState("Dev Store");
   const [platform, setPlatform] = useState<"shopify" | "custom">("custom");
   const [shopDomain, setShopDomain] = useState("");
-  const [shopToken, setShopToken] = useState("");
+  const [shopClientId, setShopClientId] = useState("");
+  const [shopClientSecret, setShopClientSecret] = useState("");
   const [shopName, setShopName] = useState("");
 
   const statusQuery = useQuery({
@@ -94,7 +95,10 @@ export default function StoreSetupPage() {
         body: {
           platform: "shopify",
           domain: shopDomain.trim(),
-          token: shopToken.trim(),
+          token: "",
+          client_id: shopClientId.trim(),
+          client_secret: shopClientSecret.trim(),
+          webhook_secret: "",
           name: shopName.trim() || undefined,
         },
       });
@@ -179,7 +183,7 @@ export default function StoreSetupPage() {
 
       <Card
         title="Shopify onboarding"
-        description="POST /stores/onboard — matches by domain or creates a new Shopify store, then queues sync + default chat agent."
+        description="Shop domain only is enough: products sync from the public storefront catalog (GET /products.json), same idea as scripts/fetch_shopify_products_from_env.py. Optional Client ID / secret are stored for future features; add webhook secret if you use Shopify webhooks."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm sm:col-span-2">
@@ -191,17 +195,30 @@ export default function StoreSetupPage() {
               placeholder="your-shop.myshopify.com"
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm sm:col-span-2">
-            <span className="text-ink-muted">Admin API access token</span>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-ink-muted">Client ID (optional)</span>
             <input
-              type="password"
               className="rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm dark:border-slate-700 dark:bg-slate-950"
-              value={shopToken}
-              onChange={(e) => setShopToken(e.target.value)}
-              placeholder="shpat_…"
+              value={shopClientId}
+              onChange={(e) => setShopClientId(e.target.value)}
+              placeholder="Optional — not used for catalog sync"
               autoComplete="off"
             />
           </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-ink-muted">Client secret (optional)</span>
+            <input
+              type="password"
+              className="rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm dark:border-slate-700 dark:bg-slate-950"
+              value={shopClientSecret}
+              onChange={(e) => setShopClientSecret(e.target.value)}
+              placeholder="Optional"
+              autoComplete="off"
+            />
+          </label>
+          <p className="text-xs text-ink-muted sm:col-span-2">
+            Product sync uses the storefront JSON feed for the domain above (published products only).
+          </p>
           <label className="flex flex-col gap-1 text-sm sm:col-span-2">
             <span className="text-ink-muted">Display name (optional)</span>
             <input
@@ -212,7 +229,10 @@ export default function StoreSetupPage() {
           </label>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <Button onClick={() => onboardMutation.mutate()} disabled={onboardMutation.isPending || !provisionSecret}>
+          <Button
+            onClick={() => onboardMutation.mutate()}
+            disabled={onboardMutation.isPending || !provisionSecret || !shopDomain.trim()}
+          >
             {onboardMutation.isPending ? "Connecting…" : "Connect Shopify"}
           </Button>
           <Button variant="secondary" type="button" onClick={() => void statusQuery.refetch()} disabled={!apiKey}>

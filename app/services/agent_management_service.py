@@ -24,6 +24,7 @@ from app.schemas.agent import (
     AgentUpdate,
 )
 from app.services.prompt_generator_service import PromptGeneratorService
+from app.services.store_context_service import StoreContextService
 
 logger = structlog.get_logger(__name__)
 
@@ -54,6 +55,8 @@ class AgentManagementService:
         store_name = store.name if store else "Our store"
         products = ProductRepository(self.db)
         cats = await products.sample_product_categories(store_id)
+        context_service = StoreContextService(self.db)
+        prompt_context = await context_service.get_prompt_context(store_id)
         return PromptGeneratorService.build_chat_system_prompt(
             store_name=store_name,
             product_categories=cats,
@@ -61,6 +64,9 @@ class AgentManagementService:
             industry_hint=None,
             goal=goal,
             language=language,
+            policies=prompt_context.get("policies"),
+            faqs=prompt_context.get("faqs"),
+            tone_hint=prompt_context.get("tone_hint"),
         )
 
     async def create_agent(self, store_id: UUID, payload: AgentCreate) -> AgentResponse:

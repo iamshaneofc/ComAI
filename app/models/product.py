@@ -12,7 +12,7 @@ Architecture rules:
 import uuid
 from typing import Any
 
-from sqlalchemy import Index, Numeric, String, Text, UniqueConstraint, Computed
+from sqlalchemy import Computed, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +27,7 @@ class Product(Base, UUIDMixin, TimestampMixin):
     # ----------------------------------------------------------------
     store_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

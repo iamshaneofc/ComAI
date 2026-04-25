@@ -178,6 +178,31 @@ class PromptGeneratorService:
         return f"## Voice & tone ({tone_key})\n{body}"
 
     @classmethod
+    def _section_store_knowledge(
+        cls,
+        *,
+        policies: list[str] | None = None,
+        faqs: list[str] | None = None,
+    ) -> str:
+        lines = ["## Store policy & FAQ context"]
+        pol = [p for p in (policies or []) if p and str(p).strip()]
+        faq = [f for f in (faqs or []) if f and str(f).strip()]
+        if pol:
+            lines.append("- Policies to follow (source: store content):")
+            for p in pol[:6]:
+                lines.append(f"  - {p}")
+        else:
+            lines.append("- No synced policy snippets available yet; avoid guessing policy details.")
+
+        if faq:
+            lines.append("- Frequently asked Q/A snippets (source: store content/metaobjects):")
+            for f in faq[:6]:
+                lines.append(f"  - {f}")
+        else:
+            lines.append("- No FAQ snippets available yet; ask a clarifying question when uncertain.")
+        return "\n".join(lines)
+
+    @classmethod
     def build_chat_system_prompt(
         cls,
         *,
@@ -187,6 +212,9 @@ class PromptGeneratorService:
         industry_hint: str | None = None,
         goal: str = "sales",
         language: str | None = None,
+        policies: list[str] | None = None,
+        faqs: list[str] | None = None,
+        tone_hint: str | None = None,
     ) -> str:
         """
         Build a structured system prompt from templates.
@@ -214,7 +242,9 @@ class PromptGeneratorService:
 
         persuasion = cls._section_persuasion(goal=goal_key, tone=(tone or "friendly").lower())
         upsell = cls._section_upsell(goal=goal_key)
-        tone_section = cls._section_tone(tone=tone)
+        effective_tone = tone_hint if tone in {"friendly"} and tone_hint else tone
+        tone_section = cls._section_tone(tone=effective_tone)
+        knowledge_section = cls._section_store_knowledge(policies=policies, faqs=faqs)
 
         parts: list[str] = [
             "## Role\n"
@@ -225,6 +255,7 @@ class PromptGeneratorService:
             persuasion,
             upsell,
             tone_section,
+            knowledge_section,
         ]
         if lang_block.strip():
             parts.append(lang_block.strip())

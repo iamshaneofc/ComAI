@@ -1,10 +1,23 @@
 from datetime import datetime, timezone
+from typing import Literal
 
 from app.schemas.product import ProductCreate
 
+CatalogSource = Literal["admin", "storefront"]
 
-def normalize_product(shopify_product: dict) -> ProductCreate:
-    """Normalizes raw Shopify JSON payload into ProductCreate schema."""
+
+def normalize_product(
+    shopify_product: dict,
+    *,
+    catalog_source: CatalogSource = "admin",
+) -> ProductCreate:
+    """
+    Normalizes raw Shopify JSON into ProductCreate.
+
+    ``catalog_source="admin"`` expects Admin REST payloads (``status`` field).
+    ``catalog_source="storefront"`` uses legacy ``/products.json`` payloads (no ``status``;
+    availability is inferred from ``published_at``).
+    """
     external_id = str(shopify_product.get("id"))
     title = shopify_product.get("title", "")
     description = shopify_product.get("body_html") or ""
@@ -31,18 +44,24 @@ def normalize_product(shopify_product: dict) -> ProductCreate:
     # Process attributes
     attributes = {"options": shopify_product.get("options", [])}
     
+    if catalog_source == "storefront":
+        is_available = bool(shopify_product.get("published_at"))
+    else:
+        is_available = shopify_product.get("status") == "active"
+
     # Required Source Dictionary mapping
     source = {
         "platform": "shopify",
         "external_id": external_id,
-        "synced_at": datetime.now(timezone.utc).isoformat()
+        "synced_at": datetime.now(timezone.utc).isoformat(),
+        "catalog": catalog_source,
     }
-    
+
     return ProductCreate(
         title=title,
         description=description,
         price=price,
-        is_available=shopify_product.get("status") == "active",
+        is_available=is_available,
         images=normalized_images,
         variants=variants,
         attributes=attributes,

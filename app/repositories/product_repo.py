@@ -7,6 +7,7 @@ Rules:
     - search_products: keyword via GIN-backed tsvector @@ to_tsquery, with ILIKE fallback
 """
 import re
+import uuid
 from uuid import UUID
 
 from sqlalchemy import String, and_, cast, func, literal, or_, select
@@ -63,7 +64,7 @@ class ProductRepository(BaseRepository[Product]):
         values = []
         for p in products:
             vals = {
-                "id": p.id,
+                "id": p.id or uuid.uuid4(),
                 "store_id": p.store_id,
                 "source_platform": p.source_platform,
                 "external_id": p.external_id,
@@ -92,7 +93,7 @@ class ProductRepository(BaseRepository[Product]):
         update_dict = {
             c.name: c
             for c in stmt.excluded
-            if c.name not in ("id", "store_id", "external_id", "created_at", "source_platform")
+            if c.name not in ("id", "store_id", "external_id", "created_at", "source_platform", "search_vector")
         }
         
         # Ensure we set updated_at explicitly or if the model triggers handle it, we can safely depend on standard behaviour.

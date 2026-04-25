@@ -46,3 +46,28 @@ def decrypt_api_key(blob: bytes | None) -> str | None:
         return _fernet().decrypt(blob).decode("utf-8")
     except (InvalidToken, ValueError, UnicodeDecodeError):
         return None
+
+
+def encrypt_secret_text(plain: str) -> str:
+    """
+    Encrypt a string secret for JSON storage.
+
+    Returns URL-safe base64 text that can be stored in JSONB.
+    """
+    token = encrypt_api_key(plain)
+    return base64.urlsafe_b64encode(token).decode("utf-8")
+
+
+def decrypt_secret_text(cipher_text: str | None) -> str | None:
+    """
+    Decrypt a secret stored as base64 text in JSONB.
+
+    Returns None for empty/invalid ciphertext.
+    """
+    if not cipher_text:
+        return None
+    try:
+        blob = base64.urlsafe_b64decode(cipher_text.encode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return decrypt_api_key(blob)

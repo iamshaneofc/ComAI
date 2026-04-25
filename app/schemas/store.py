@@ -9,9 +9,9 @@ Rules:
 from datetime import datetime
 from uuid import UUID
 
-from typing import Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ----------------------------------------------------------------
@@ -80,11 +80,30 @@ ToneLiteral = Literal["friendly", "professional", "playful"]
 
 
 class StoreOnboardRequest(BaseModel):
-    """Connect a Shopify shop: credentials are stored; sync + default chat agent run in background."""
+    """Connect a store for automatic product sync (Shopify or custom JSON feed)."""
 
-    platform: str = Field(..., examples=["shopify"])
-    domain: str = Field(..., min_length=3, max_length=255, examples=["cool-brand.myshopify.com"])
-    token: str = Field(..., min_length=8, max_length=512, description="Shopify Admin API access token")
+    platform: str = Field(..., examples=["shopify", "custom"])
+    domain: str = Field(..., min_length=3, max_length=255, examples=["cool-brand.myshopify.com", "brand.com"])
+    token: str = Field(
+        default="",
+        max_length=512,
+        description="Optional legacy: Admin API token (shpat_/shpca_). Not used for catalog sync.",
+    )
+    client_id: str = Field(
+        default="",
+        max_length=255,
+        description="Optional: kept in credentials for future use; not used for catalog sync.",
+    )
+    client_secret: str = Field(
+        default="",
+        max_length=512,
+        description="Optional: kept in credentials for future use; not used for catalog sync.",
+    )
+    webhook_secret: str = Field(
+        default="",
+        max_length=512,
+        description="Optional: required only if you use Shopify webhooks (HMAC verification).",
+    )
     name: str | None = Field(
         None,
         min_length=2,
@@ -100,13 +119,30 @@ class StoreOnboardRequest(BaseModel):
         max_length=200,
         description="Optional vertical, e.g. fashion, electronics",
     )
+    custom_products_url: str = Field(
+        default="",
+        max_length=2000,
+        description="Required for platform=custom. Public JSON endpoint returning products.",
+    )
+    custom_items_path: str = Field(
+        default="",
+        max_length=255,
+        description="Optional dot path to array in JSON (e.g. data.products). Empty means root list.",
+    )
+    custom_field_map: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Optional map from ProductCreate fields to JSON paths in each item. "
+            "Example: {'title':'name','price':'pricing.amount','images':'media.images'}"
+        ),
+    )
 
     @field_validator("platform")
     @classmethod
-    def platform_shopify_only(cls, v: str) -> str:
+    def platform_supported(cls, v: str) -> str:
         p = v.lower().strip()
-        if p != "shopify":
-            raise ValueError("Onboarding currently supports platform=shopify only")
+        if p not in {"shopify", "custom"}:
+            raise ValueError("Onboarding currently supports platform=shopify or platform=custom")
         return p
 
     @field_validator("domain")
@@ -116,6 +152,59 @@ class StoreOnboardRequest(BaseModel):
         if ".." in d or d.startswith(".") or not d:
             raise ValueError("Invalid domain")
         return d
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_webhook_secret_for_oauth_only(cls, data: Any) -> Any:
+        """OAuth-only onboard: copy client_secret into webhook_secret when webhook is omitted."""
+        if not isinstance(data, dict):
+            return data
+        token = str(data.get("token") or "").strip()
+        cid = str(data.get("client_id") or "").strip()
+        csec = str(data.get("client_secret") or "").strip()
+        wh = str(data.get("webhook_secret") or "").strip()
+        has_admin = bool(token)
+        has_oauth = bool(cid and csec)
+        if has_oauth and not wh and not has_admin:
+            return {**data, "webhook_secret": csec}
+        return data
+
+    @model_validator(mode="after")
+    def shopify_auth_optional(self) -> Self:
+        """
+        Validate platform-specific onboarding rules.
+
+        - custom: requires JSON feed URL
+        - shopify: domain-only is valid; optional Admin/OAuth fields validated when provided
+        """
+        if self.platform == "custom":
+            if not self.custom_products_url.strip():
+                raise ValueError("custom_products_url is required when platform=custom")
+            return self
+
+        t = self.token.strip()
+        cid = self.client_id.strip()
+        csec = self.client_secret.strip()
+        wh = self.webhook_secret.strip()
+        has_admin = bool(t)
+        has_oauth = bool(cid and csec)
+        catalog_only = not has_admin and not has_oauth
+
+        if catalog_only:
+            return self
+
+        if has_admin and t.startswith("shpss_"):
+            raise ValueError(
+                "token looks like the app client secret (shpss_), not an Admin API access token. "
+                "Leave token empty for domain-only onboarding."
+            )
+        if has_admin and not wh:
+            raise ValueError("webhook_secret is required when storing an Admin API token (shpat_/shpca_).")
+        if len(wh) < 8:
+            raise ValueError(
+                "webhook_secret must be at least 8 characters when using Admin token or OAuth credentials."
+            )
+        return self
 
 
 class StoreOnboardResponse(StoreCreatedResponse):
@@ -141,6 +230,34 @@ class StoreSummary(BaseModel):
 
 class PaginatedStores(BaseModel):
     items: list[StoreSummary]
+    total: int
+    offset: int
+    limit: int
+
+
+class PlatformStoreListItem(BaseModel):
+    """
+    Dev-console row: includes full tenant api_key.
+
+    Only returned from GET /api/v1/platform/stores with X-Provision-Secret.
+    Never expose this endpoint on the public internet.
+    """
+
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    name: str
+    slug: str
+    platform: str
+    domain: str | None
+    onboarding_status: str
+    is_active: bool
+    created_at: datetime
+    api_key: str
+
+
+class PaginatedPlatformStores(BaseModel):
+    items: list[PlatformStoreListItem]
     total: int
     offset: int
     limit: int

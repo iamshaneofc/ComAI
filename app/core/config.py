@@ -6,7 +6,7 @@ All settings MUST be defined here. Do NOT use os.getenv() elsewhere in the codeb
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
 
     # --- Redis ---
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str
     REDIS_CACHE_TTL: int = 3600
 
     # --- JWT ---
@@ -47,11 +47,40 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-1.5-pro"
 
-    ACTIVE_LLM_PROVIDER: Literal["openai", "gemini"] = "openai"
+    ACTIVE_LLM_PROVIDER: Literal["openai", "gemini", "mock"] = "openai"
 
     # --- Shopify ---
     SHOPIFY_API_VERSION: str = "2024-04"
     SHOPIFY_WEBHOOK_SECRET: str = ""
+    SHOPIFY_SYNC_MODE: Literal["live", "mock"] = "live"
+    # Optional local dev / scripts (see scripts/shopify_backend_smoke.py). Empty in production.
+    SHOPIFY_SMOKE_DOMAIN: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHOPIFY_SMOKE_DOMAIN", "SHOPIFY_DOMAIN"),
+    )
+    SHOPIFY_SMOKE_ACCESS_TOKEN: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHOPIFY_SMOKE_ACCESS_TOKEN", "SHOPIFY_ADMIN_ACCESS_TOKEN"),
+        description="Admin API token (shpat_/shpca_), not shpss_ client secret",
+    )
+    SHOPIFY_SMOKE_WEBHOOK_SECRET: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SHOPIFY_SMOKE_WEBHOOK_SECRET",
+            "SHOPIFY_STORE_WEBHOOK_SECRET",
+            "WEBHOOK_SIGNING_SECRET",
+        ),
+    )
+    SHOPIFY_APP_CLIENT_ID: str = ""
+    SHOPIFY_APP_CLIENT_SECRET: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SHOPIFY_APP_CLIENT_SECRET",
+            "SHOPIFY_CLIENT_SECRET",
+            "ADMIN_API_ACCESS",
+        ),
+    )
+    DEV_TENANT_API_KEY: str = ""  # ComAI X-API-KEY for curl / manual testing
 
     # --- Meta / WhatsApp ---
     META_ACCESS_TOKEN: str = ""
@@ -59,8 +88,8 @@ class Settings(BaseSettings):
     META_WEBHOOK_VERIFY_TOKEN: str = ""
 
     # --- Celery ---
-    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
-    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+    CELERY_BROKER_URL: str
+    CELERY_RESULT_BACKEND: str
 
     # --- Vector Store ---
     VECTOR_STORE_PROVIDER: Literal["pgvector", "pinecone"] = "pgvector"
@@ -82,6 +111,14 @@ class Settings(BaseSettings):
             import json
             return json.loads(v)
         return v
+
+    @model_validator(mode="after")
+    def validate_provider_keys(self) -> "Settings":
+        if self.ACTIVE_LLM_PROVIDER == "openai" and not self.OPENAI_API_KEY.strip():
+            raise ValueError("OPENAI_API_KEY is required when ACTIVE_LLM_PROVIDER=openai")
+        if self.ACTIVE_LLM_PROVIDER == "gemini" and not self.GEMINI_API_KEY.strip():
+            raise ValueError("GEMINI_API_KEY is required when ACTIVE_LLM_PROVIDER=gemini")
+        return self
 
 
 @lru_cache

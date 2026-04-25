@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.intent.detector import (
     INTENT_GENERAL,
     INTENT_GREETING,
+    INTENT_ORDER_STATUS,
     INTENT_PRICE_FILTER,
     INTENT_PRODUCT_SEARCH,
     INTENT_SUPPORT,
@@ -36,6 +37,8 @@ from app.modules.products.service import ProductService
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.agent_service import AgentService, AgentType
 from app.services.memory_service import MemoryService
+from app.services.order_service import OrderService
+from app.services.store_context_service import StoreContextService
 from app.services.user_service import UserService
 
 logger = structlog.get_logger(__name__)
@@ -68,10 +71,12 @@ class ChatService:
     def __init__(self, db: AsyncSession = Depends(get_db)) -> None:
         self.db = db
         self.product_service = ProductService(db)
-        self.retrieval = RetrievalEngine(self.product_service)
+        self.store_context_service = StoreContextService(db)
+        self.retrieval = RetrievalEngine(self.product_service, self.store_context_service)
         self._agent_service = AgentService(db)
         self.user_service = UserService(db)
         self.memory_service = MemoryService(db)
+        self.order_service = OrderService(db)
 
     async def handle_chat(
         self,
@@ -125,7 +130,13 @@ class ChatService:
 
                 from app.tasks.automation_tasks import evaluate_user_automation
 
-                evaluate_user_automation.delay(str(store_id), str(user.id))
+                try:
+                    evaluate_user_automation.apply_async(
+                        args=(str(store_id), str(user.id)),
+                        retry=False,
+                    )
+                except Exception as exc:
+                    log.error("Failed to enqueue automation task", error=str(exc))
 
         # ── Step 3 + 4: Build prompt + call LLM (or canned) ───────
         if intent.intent == INTENT_GREETING:
@@ -133,6 +144,25 @@ class ChatService:
 
         elif intent.intent == INTENT_SUPPORT:
             reply = SUPPORT_RESPONSE
+
+        elif intent.intent == INTENT_ORDER_STATUS:
+            if user is None:
+                reply = (
+                    "I can check your order status after we identify your account. "
+                    "Please continue from your signed-in session or share the phone/email linked to your order."
+                )
+            else:
+                order = await self.order_service.find_latest_order_for_user(store_id, user)
+                if order is None:
+                    reply = (
+                        "I could not find a recent order linked to your profile yet. "
+                        "Please verify the same phone/email used at checkout."
+                    )
+                else:
+                    reply = (
+                        f"Your latest order ({order['order_number']}) is currently "
+                        f"**{order['status']}** with fulfillment status **{order['fulfillment_status']}**."
+                    )
 
         elif intent.intent == INTENT_GENERAL and not products:
             reply = FALLBACK_RESPONSE
@@ -146,12 +176,14 @@ class ChatService:
                 model=resolved.model,
             )
             memory_context = format_memory_context_for_prompt(user_preferences)
+            store_context_chunks = await self.retrieval.get_store_context_for_query(store_id)
             prompt = build_prompt(
                 query=payload.message,
                 intent=intent,
                 products=products,
                 system_prompt=resolved.system_prompt,
                 memory_context=memory_context,
+                store_context_chunks=store_context_chunks,
             )
             llm = get_llm_provider(
                 provider=resolved.provider,

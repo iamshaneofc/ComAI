@@ -50,8 +50,33 @@ class StoreRepository(BaseRepository[Store]):
         )
         return result.scalar_one_or_none()
 
+    async def get_by_platform_domain(self, platform: str, domain: str) -> Store | None:
+        """Resolve store by credentials.<platform>.domain (case-insensitive)."""
+        p = platform.strip().lower()
+        d = domain.strip().lower()
+        if p not in {"shopify", "custom", "woocommerce"}:
+            return None
+        result = await self.db.execute(
+            select(Store).where(
+                and_(
+                    Store.credentials.isnot(None),
+                    func.lower(Store.credentials[p]["domain"].as_string()) == d,
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_id(self, store_id: UUID) -> Store | None:
         result = await self.db.execute(select(Store).where(Store.id == store_id))
+        return result.scalar_one_or_none()
+
+    async def get_by_whatsapp_phone_number(self, phone_number: str) -> Store | None:
+        result = await self.db.execute(
+            select(Store).where(
+                Store.whatsapp_phone_number == phone_number,
+                Store.is_active.is_(True),
+            )
+        )
         return result.scalar_one_or_none()
 
     async def list_stores(

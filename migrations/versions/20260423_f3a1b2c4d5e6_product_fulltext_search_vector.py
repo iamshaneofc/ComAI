@@ -12,7 +12,7 @@ Create Date: 2026-04-23
 from alembic import op
 
 revision = "f3a1b2c4d5e6"
-down_revision = None
+down_revision = "9e1f2a3b4c5d"
 branch_labels = None
 depends_on = None
 
@@ -33,6 +33,7 @@ def upgrade() -> None:
         ) STORED
         """
     )
+    op.execute("ALTER TABLE products ALTER COLUMN search_vector SET NOT NULL")
     op.create_index(
         "ix_products_search_vector",
         "products",

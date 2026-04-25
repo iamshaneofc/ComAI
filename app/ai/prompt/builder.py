@@ -77,6 +77,7 @@ def build_prompt(
     products: list[ProductSummary],
     system_prompt: str | None = None,
     memory_context: str | None = None,
+    store_context_chunks: list[str] | None = None,
 ) -> str:
     """
     Build a complete LLM prompt.
@@ -170,6 +171,15 @@ def build_prompt(
             "Context: What we know about this customer's preferences from prior activity: "
             f"{memory_context.strip()}\n"
         )
+
+    if store_context_chunks:
+        compact = [c.strip() for c in store_context_chunks if c and c.strip()]
+        if compact:
+            prompt_parts.append(
+                "Context: Store policy/content facts for grounded responses (internal):\n"
+                + "\n".join(f"- {c}" for c in compact[:10])
+                + "\n"
+            )
 
     # ----------------------------------------------------------------
     # User message

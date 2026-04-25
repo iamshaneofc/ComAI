@@ -1,38 +1,31 @@
 """
-Pytest configuration — shared fixtures for all tests.
-
-Available fixtures:
-    - async_client: AsyncTestClient for FastAPI
-    - db_session: Test database session (rolled back after each test)
-    - mock_llm: Mocked LLM provider (no real API calls in tests)
+Pytest configuration — PostgreSQL integration fixtures.
 """
-import asyncio
 from collections.abc import AsyncGenerator
+from os import getenv
 from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.database import get_db
 from app.main import app
+from app.models.base import Base
+from app.models.store import Store
 
-# ----------------------------------------------------------------
-# Use in-memory SQLite for tests (or a real test DB URL from env)
-# ----------------------------------------------------------------
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+TEST_DATABASE_URL = getenv("TEST_DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/comai_test")
+if "postgresql" not in TEST_DATABASE_URL:
+    raise RuntimeError("TEST_DATABASE_URL must point to PostgreSQL")
 
-test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
-TestSessionLocal = async_sessionmaker(
-    bind=test_engine, class_=AsyncSession, expire_on_commit=False
-)
+test_engine = create_async_engine(TEST_DATABASE_URL, echo=False, pool_pre_ping=True)
+TestSessionLocal = async_sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
 
 
 @pytest_asyncio.fixture(scope="session")
-async def setup_db():
-    """Create all tables in the test database."""
-    from app.models.base import Base
+async def setup_db() -> AsyncGenerator[None, None]:
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
@@ -42,29 +35,51 @@ async def setup_db():
 
 @pytest_asyncio.fixture
 async def db_session(setup_db) -> AsyncGenerator[AsyncSession, None]:
-    """Yields a test DB session, rolls back after each test."""
     async with TestSessionLocal() as session:
         yield session
-        await session.rollback()
+        for table in reversed(Base.metadata.sorted_tables):
+            await session.execute(text(f"TRUNCATE TABLE {table.name} RESTART IDENTITY CASCADE"))
+        await session.commit()
 
 
 @pytest_asyncio.fixture
 async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
-    """AsyncClient with overridden get_db to use test session."""
     async def override_get_db():
-        yield db_session
+        try:
+            yield db_session
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+            raise
 
     app.dependency_overrides[get_db] = override_get_db
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
     app.dependency_overrides.clear()
 
 
+@pytest_asyncio.fixture
+async def make_store(db_session: AsyncSession):
+    async def _make_store(*, name: str, slug: str, api_key: str, platform: str = "shopify", credentials: dict | None = None):
+        row = Store(
+            name=name,
+            slug=slug,
+            platform=platform,
+            api_key=api_key,
+            credentials=credentials,
+            onboarding_status="created",
+            is_active=True,
+        )
+        db_session.add(row)
+        await db_session.flush()
+        await db_session.refresh(row)
+        return row
+
+    return _make_store
+
+
 @pytest.fixture
 def mock_llm():
-    """Mock LLM provider — returns canned response without API calls."""
     mock = AsyncMock()
     mock.generate.return_value = AsyncMock(
         text="I can help you find the perfect product!",

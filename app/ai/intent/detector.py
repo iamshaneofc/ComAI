@@ -22,6 +22,7 @@ INTENT_PRICE_FILTER   = "price_filter"
 INTENT_GENERAL        = "general"
 INTENT_GREETING       = "greeting"
 INTENT_SUPPORT        = "support"
+INTENT_ORDER_STATUS   = "order_status"
 
 
 # ----------------------------------------------------------------
@@ -37,6 +38,12 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
 
 GREETING_KEYWORDS = {"hi", "hello", "hey", "namaste", "good morning", "good afternoon"}
 SUPPORT_KEYWORDS  = {"help", "support", "track", "order", "return", "refund", "cancel"}
+ORDER_STATUS_PATTERNS = (
+    r"\bwhere\s+is\s+my\s+order\b",
+    r"\btrack\s+my\s+order\b",
+    r"\border\s+status\b",
+    r"\bmy\s+order\b",
+)
 
 
 @dataclass
@@ -64,6 +71,10 @@ def detect_intent(query: str) -> IntentResult:
     # --- Greeting ---
     if tokens & GREETING_KEYWORDS:
         return IntentResult(intent=INTENT_GREETING, confidence=0.95)
+
+    # --- Support ---
+    if any(re.search(p, q) for p in ORDER_STATUS_PATTERNS):
+        return IntentResult(intent=INTENT_ORDER_STATUS, confidence=0.95)
 
     # --- Support ---
     if tokens & SUPPORT_KEYWORDS:

@@ -17,6 +17,8 @@ from app.core.config import settings
 from app.models.base import Base
 from app.models.store import Store  # noqa: F401
 from app.models.product import Product  # noqa: F401
+from app.models.user import User  # noqa: F401
+from app.models.event import Event  # noqa: F401
 from app.models.store_ai_config import StoreAIConfig  # noqa: F401
 from app.models.agent import Agent  # noqa: F401
 

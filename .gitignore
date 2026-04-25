@@ -5,8 +5,8 @@ __pycache__/
 *.pyd
 .Python
 
-# Virtual environments
-.venv/
+# Virtual environments (any name: .venv, .venv312, etc.)
+.venv*/
 venv/
 env/
 ENV/
@@ -14,6 +14,10 @@ ENV/
 
 # Environment variables — NEVER commit these
 .env
+.env.*
+!.env.example
+!.env.*.example
+.env.shopify.smoke
 .env.local
 .env.production
 .env.staging
@@ -27,8 +31,21 @@ ENV/
 # Testing
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Celery / local task broker state
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.pid
+
+# Local data dumps / exports (do not commit customer or catalog exports)
+*_export.csv
+*_products_export.csv
+exports/
 
 # Alembic
 migrations/versions/__pycache__/
@@ -53,3 +70,15 @@ Thumbs.db
 admin/node_modules/
 admin/.next/
 admin/out/
+admin/.turbo/
+admin/.vercel/
+
+# Local databases / caches
+*.sqlite3
+*.db
+
+# Cursor / local editor (optional; keeps machine-specific paths out of commits)
+.cursor/
+
+# Python version pinning (local pyenv)
+.python-version
