@@ -20,7 +20,7 @@ from app.schemas.product import ProductSummary
 logger = structlog.get_logger(__name__)
 
 # Product-search chat: always surface up to this many DB-backed items in context.
-PRODUCT_SEARCH_CONTEXT_LIMIT = 3
+PRODUCT_SEARCH_CONTEXT_LIMIT = 5
 
 
 class RetrievalEngine:
@@ -40,6 +40,30 @@ class RetrievalEngine:
         # This keeps the AI layer decoupled from FastAPI's DI system
         self.product_service = product_service
         self.store_context_service = store_context_service
+
+    @staticmethod
+    def _rank_products(
+        products: list[ProductSummary],
+        *,
+        keyword: str | None,
+        max_price: float | None,
+    ) -> list[ProductSummary]:
+        if not products:
+            return []
+        terms = [t for t in (keyword or "").lower().split() if t]
+
+        def score(p: ProductSummary) -> tuple[int, float]:
+            title = (p.title or "").lower()
+            tags = " ".join((p.tags or [])).lower()
+            text = f"{title} {tags}"
+            keyword_hits = sum(1 for t in terms if t in text)
+            if max_price is None:
+                price_penalty = 0.0
+            else:
+                price_penalty = abs(float(p.price) - float(max_price))
+            return (keyword_hits, -price_penalty)
+
+        return sorted(products, key=score, reverse=True)
 
     async def get_products_for_query(
         self,
@@ -122,7 +146,7 @@ class RetrievalEngine:
                 if len(products) >= effective_limit:
                     break
 
-        products = products[:effective_limit]
+        products = self._rank_products(products, keyword=keyword, max_price=max_price)[:effective_limit]
 
         logger.info(
             "Products retrieved",

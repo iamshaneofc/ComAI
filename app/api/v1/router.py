@@ -9,7 +9,7 @@ All business routes require X-API-KEY except:
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import resolve_rate_limit, verify_store_api_key
-from app.api.v1 import agents, ai_config, analytics, auth, chat, events, health, orders, platform, products, stores
+from app.api.v1 import agents, ai_config, analytics, auth, chat, debug, events, health, orders, platform, products, stores
 from app.api.v1.webhooks import shopify, whatsapp
 
 v1_router = APIRouter()
@@ -40,6 +40,7 @@ protected.include_router(orders.router, prefix="/orders", tags=["Orders"])
 protected.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 protected.include_router(stores.tenant_router, prefix="/stores", tags=["Stores"])
 protected.include_router(events.router, prefix="/events", tags=["Events"])
+protected.include_router(debug.router, prefix="/debug", tags=["Debug"])
 protected.include_router(agents.router, prefix="/agents", tags=["Agents"])
 protected.include_router(ai_config.router, prefix="/ai-config", tags=["AI Config"])
 

@@ -112,7 +112,11 @@ def detect_intent(query: str) -> IntentResult:
     keywords = [t for t in tokens if t not in stop_words and len(t) > 2 and not t.isdigit()]
 
     # --- Determine intent ---
-    if price_limit is not None or detected_categories or keywords:
+    if price_limit is not None and not detected_categories and not keywords:
+        intent = INTENT_PRICE_FILTER
+    elif price_limit is not None and (detected_categories or keywords):
+        intent = INTENT_PRICE_FILTER
+    elif detected_categories or keywords:
         intent = INTENT_PRODUCT_SEARCH
     else:
         intent = INTENT_GENERAL

@@ -67,3 +67,41 @@ class MemoryService:
             "avg_price_limit": avg_price,
             "recent_searches": recent_searches[:5],
         }
+
+    async def track_chat_turn(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        user_message: str,
+        bot_response: str,
+    ) -> Event:
+        """Persist a lightweight chat turn for short conversation context."""
+        payload = {
+            "user_message": user_message[:800],
+            "bot_response": bot_response[:1200],
+        }
+        return await self.track_event(store_id, user_id, "chat_turn", payload)
+
+    async def get_recent_conversation_turns(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        limit: int = 4,
+    ) -> list[dict]:
+        user = await self.users.get_by_id_for_store(store_id, user_id)
+        if user is None:
+            return []
+        events = await self.repo.get_recent_events_by_type(
+            store_id=store_id,
+            user_id=user_id,
+            event_type="chat_turn",
+            limit=limit,
+        )
+        turns: list[dict] = []
+        for event in reversed(events):
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            user_msg = str(payload.get("user_message") or "").strip()
+            bot_msg = str(payload.get("bot_response") or "").strip()
+            if user_msg or bot_msg:
+                turns.append({"user_message": user_msg, "bot_response": bot_msg})
+        return turns

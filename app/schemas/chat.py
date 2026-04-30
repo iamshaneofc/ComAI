@@ -28,3 +28,4 @@ class ChatResponse(BaseModel):
     message: str
     intent: str
     products: list[dict] = []           # list of ProductSummary dicts
+    metadata: dict = {}

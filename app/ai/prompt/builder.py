@@ -48,6 +48,36 @@ def format_memory_context_for_prompt(user_preferences: dict | None) -> str | Non
     return " ".join(lines)
 
 
+def format_conversation_context_for_prompt(
+    turns: list[dict] | None,
+    *,
+    max_messages: int = 8,
+    max_chars: int = 1800,
+) -> str | None:
+    """
+    Turn last N chat turns into a compact transcript section.
+    """
+    if not turns:
+        return None
+    lines: list[str] = []
+    for t in turns[-max_messages:]:
+        u = str(t.get("user_message") or "").strip()
+        b = str(t.get("bot_response") or "").strip()
+        if u:
+            lines.append(f"User: {u[:220]}")
+        if b:
+            lines.append(f"Assistant: {b[:260]}")
+    if not lines:
+        return None
+    out = "\n".join(lines)
+    if len(out) > max_chars:
+        out = out[-max_chars:]
+        # Keep truncation readable for prompt.
+        if "\n" in out:
+            out = out[out.find("\n") + 1:]
+    return out
+
+
 def _format_catalog_products_for_prompt(products: list[ProductSummary]) -> str:
     """Structured, DB-grounded lines: name, price, short benefit (description/tags only)."""
     lines: list[str] = []
@@ -77,6 +107,7 @@ def build_prompt(
     products: list[ProductSummary],
     system_prompt: str | None = None,
     memory_context: str | None = None,
+    conversation_context: str | None = None,
     store_context_chunks: list[str] | None = None,
 ) -> str:
     """
@@ -170,6 +201,12 @@ def build_prompt(
         prompt_parts.append(
             "Context: What we know about this customer's preferences from prior activity: "
             f"{memory_context.strip()}\n"
+        )
+
+    if conversation_context and conversation_context.strip():
+        prompt_parts.append(
+            "Conversation so far (recent turns):\n"
+            f"{conversation_context.strip()}\n"
         )
 
     if store_context_chunks:

@@ -16,3 +16,22 @@ class EventRepository(BaseRepository[Event]):
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def get_recent_events_by_type(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        event_type: str,
+        limit: int = 20,
+    ) -> list[Event]:
+        result = await self.db.execute(
+            select(Event)
+            .where(
+                Event.store_id == store_id,
+                Event.user_id == user_id,
+                Event.event_type == event_type,
+            )
+            .order_by(desc(Event.created_at))
+            .limit(limit)
+        )
+        return list(result.scalars().all())
